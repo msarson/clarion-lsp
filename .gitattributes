@@ -1,0 +1,22 @@
+# Windows line endings for C# source
+* text=auto eol=crlf
+
+# Binary files
+*.dll binary
+*.exe binary
+*.pdb binary
+*.png binary
+*.ico binary
+
+# Solution / project files — keep CRLF
+*.sln text eol=crlf
+*.slnx text eol=crlf
+*.csproj text eol=crlf
+*.addin text eol=crlf
+
+# Text files
+*.md text eol=crlf
+*.txt text eol=crlf
+*.json text eol=crlf
+*.xml text eol=crlf
+*.config text eol=crlf

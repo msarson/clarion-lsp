@@ -1,0 +1,16 @@
+# Build output
+**/bin/
+**/obj/
+
+# User-specific files
+*.user
+Directory.Build.props.user
+.vs/
+
+# NuGet
+packages/
+*.nupkg
+
+# OS
+Thumbs.db
+.DS_Store

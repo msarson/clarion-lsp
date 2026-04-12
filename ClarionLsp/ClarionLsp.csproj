@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+    <AssemblyName>ClarionLsp</AssemblyName>
+    <RootNamespace>ClarionLsp</RootNamespace>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ICSharpCode.SharpDevelop">
+      <HintPath>$(ClarionBin)\ICSharpCode.SharpDevelop.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ICSharpCode.Core">
+      <HintPath>$(ClarionBin)\ICSharpCode.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClarionLsp.Contracts\ClarionLsp.Contracts.csproj">
+      <Private>False</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+  <Target Name="DeployAddin" AfterTargets="Build">
+    <MakeDir Directories="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp" />
+    <Copy SourceFiles="$(OutputPath)ClarionLsp.dll"
+          DestinationFolder="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\ClarionLsp.addin"
+          DestinationFolder="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

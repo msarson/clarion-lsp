@@ -1,0 +1,19 @@
+<AddIn name        = "ClarionLsp"
+       author      = "msarson"
+       copyright   = ""
+       description = "Shared Clarion LSP addin. Manages the LSP server lifecycle and exposes IClarionLanguageClient for other addins to consume.">
+
+  <Manifest>
+    <Identity name="ClarionLsp" version="1.0.0"/>
+    <Dependency addin="SharpDevelop" version="2.1"/>
+  </Manifest>
+
+  <Runtime>
+    <Import assembly="ClarionLsp.dll"/>
+  </Runtime>
+
+  <Path name="/Workspace/Autostart">
+    <Class id="ClarionLspStartup" class="ClarionLsp.LspStartupCommand"/>
+  </Path>
+
+</AddIn>

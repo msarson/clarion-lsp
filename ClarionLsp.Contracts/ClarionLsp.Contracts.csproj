@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>ClarionLsp.Contracts</AssemblyName>
+    <RootNamespace>ClarionLsp.Contracts</RootNamespace>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <Target Name="DeployContracts" AfterTargets="Build">
+    <Copy SourceFiles="$(OutputPath)ClarionLsp.Contracts.dll"
+          DestinationFolder="$(ClarionBin)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
