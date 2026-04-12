@@ -90,12 +90,13 @@ Adjust the path to match your Clarion installation.
 ### Build
 
 ```powershell
-# From the clarion-lsp folder
+# dotnet CLI (simplest)
+dotnet build ClarionLsp.slnx -c Debug
+
+# or MSBuild directly
 & "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" `
     ClarionLsp.slnx /p:Configuration=Debug /v:minimal
 ```
-
-Do **not** use `dotnet build` — .NET Framework 4.8 projects with `$(ClarionBin)` paths do not resolve correctly with the dotnet CLI.
 
 ### Automatic deploy on build
 
