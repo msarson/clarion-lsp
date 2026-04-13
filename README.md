@@ -75,17 +75,20 @@ All log output goes to `OutputDebugString` (visible in [DebugView](https://learn
 
 ### ClarionBin property
 
-Both projects reference Clarion IDE assemblies via `$(ClarionBin)`. Set this in `Directory.Build.props` or `Directory.Build.props.user` in the solution root:
+Both projects reference Clarion IDE assemblies via `$(ClarionBin)`. The repo ships a `Directory.Build.props` with a default path of `C:\Clarion\Clarion11.1\bin`. If your Clarion is installed elsewhere, override it without touching the committed file:
+
+1. Copy `Directory.Build.props.user.template` → `Directory.Build.props.user` (already gitignored)
+2. Edit the path inside it:
 
 ```xml
 <Project>
   <PropertyGroup>
-    <ClarionBin>C:\Clarion\Clarion11.1\bin</ClarionBin>
+    <ClarionBin>C:\YourClarion\bin</ClarionBin>
   </PropertyGroup>
 </Project>
 ```
 
-Adjust the path to match your Clarion installation.
+`Directory.Build.props.user` is imported automatically by `Directory.Build.props` when it exists and takes priority over the default. Never commit it — it's personal to your machine.
 
 ### Build
 
