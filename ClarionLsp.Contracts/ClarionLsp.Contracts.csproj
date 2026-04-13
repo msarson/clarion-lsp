@@ -9,8 +9,9 @@
   </PropertyGroup>
 
   <Target Name="DeployContracts" AfterTargets="Build">
+    <MakeDir Directories="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp" />
     <Copy SourceFiles="$(OutputPath)ClarionLsp.Contracts.dll"
-          DestinationFolder="$(ClarionBin)"
+          DestinationFolder="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp"
           SkipUnchangedFiles="true" />
   </Target>
 

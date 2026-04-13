@@ -100,13 +100,16 @@ dotnet build ClarionLsp.slnx -c Debug
 
 ### Automatic deploy on build
 
-`ClarionLsp.csproj` includes a `DeployAddin` target that copies the built DLL and `.addin` manifest to:
+Both projects deploy to the same addin folder on build:
 
 ```
 C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp\
+  ClarionLsp.dll
+  ClarionLsp.Contracts.dll
+  ClarionLsp.addin
 ```
 
-`ClarionLsp.Contracts.csproj` copies `ClarionLsp.Contracts.dll` to `$(ClarionBin)` so it is on the IDE's probing path and consumer addins can load it.
+`ClarionLsp.addin` imports both DLLs so SharpDevelop loads them both into the AppDomain when the addin starts — this is what makes `ClarionLspLocator` and `IClarionLanguageClient` visible to consumer addins.
 
 The Clarion IDE must be closed before deploying — DLLs are locked while the IDE runs.
 
@@ -120,7 +123,7 @@ Add a reference in your `.csproj`:
 
 ```xml
 <Reference Include="ClarionLsp.Contracts">
-  <HintPath>$(ClarionBin)\ClarionLsp.Contracts.dll</HintPath>
+  <HintPath>C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp\ClarionLsp.Contracts.dll</HintPath>
   <Private>False</Private>
 </Reference>
 ```

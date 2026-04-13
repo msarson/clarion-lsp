@@ -9,6 +9,7 @@
   </Manifest>
 
   <Runtime>
+    <Import assembly="ClarionLsp.Contracts.dll"/>
     <Import assembly="ClarionLsp.dll"/>
   </Runtime>
 
