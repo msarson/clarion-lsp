@@ -1,0 +1,16 @@
+<Project>
+
+  <!--
+    Import user-local overrides first (not committed to source control).
+    Copy Directory.Build.props.user.template to Directory.Build.props.user
+    and set ClarionBin to your local Clarion installation.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Build.props.user"
+          Condition="Exists('$(MSBuildThisFileDirectory)Directory.Build.props.user')" />
+
+  <!-- Default Clarion bin path — override in Directory.Build.props.user -->
+  <PropertyGroup Condition="'$(ClarionBin)' == ''">
+    <ClarionBin>C:\Clarion\Clarion11.1\bin</ClarionBin>
+  </PropertyGroup>
+
+</Project>

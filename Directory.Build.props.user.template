@@ -1,0 +1,8 @@
+<Project>
+
+  <!-- Set your local Clarion installation path here -->
+  <PropertyGroup>
+    <ClarionBin>C:\Clarion\Clarion11.1\bin</ClarionBin>
+  </PropertyGroup>
+
+</Project>
