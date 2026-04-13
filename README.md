@@ -117,21 +117,32 @@ The Clarion IDE must be closed before deploying — DLLs are locked while the ID
 
 ## Consuming the API from another addin
 
-### 1. Reference `ClarionLsp.Contracts` via NuGet
+### Step 1 — Build this repo and get the DLL
+
+Clone this repo and build it:
 
 ```powershell
-dotnet add package ClarionLsp.Contracts
+git clone https://github.com/msarson/clarion-lsp.git
+cd clarion-lsp
+dotnet build ClarionLsp.slnx -c Debug
 ```
 
-Or add directly to your `.csproj`:
+This produces `ClarionLsp.Contracts.dll` in `ClarionLsp.Contracts\bin\Debug\net48\`.
+
+### Step 2 — Reference `ClarionLsp.Contracts.dll` in your addin project
+
+Add a reference in your `.csproj`, pointing to wherever you built or copied the DLL:
 
 ```xml
-<PackageReference Include="ClarionLsp.Contracts" Version="1.0.0" />
+<Reference Include="ClarionLsp.Contracts">
+  <HintPath>..\clarion-lsp\ClarionLsp.Contracts\bin\Debug\net48\ClarionLsp.Contracts.dll</HintPath>
+  <Private>True</Private>
+</Reference>
 ```
 
-Set `<Private>True</Private>` (the default) so the DLL is copied into your addin's output folder. This is intentional — if ClarionLsp is installed, its copy loads first (it's an autostart addin) and the CLR reuses that instance, so `ClarionLspLocator.Current` is shared. If ClarionLsp is *not* installed, your copy loads instead and `ClarionLspLocator.Current` remains null — your fallback path handles it.
+`<Private>True</Private>` copies the DLL into your addin's output folder — this is intentional and explained below.
 
-### 2. Declare a soft dependency in your `.addin` manifest
+### Step 3 — Declare a soft dependency in your `.addin` manifest
 
 ```xml
 <Dependency addin="ClarionLsp" version="1.0" coerced="true"/>
@@ -139,16 +150,17 @@ Set `<Private>True</Private>` (the default) so the DLL is copied into your addin
 
 `coerced="true"` means your addin still loads even if ClarionLsp is absent — always null-check `ClarionLspLocator.Current`.
 
-### 3. Call the API
+### Step 4 — Call the API
 
 ```csharp
 using ClarionLsp.Contracts;
 using ClarionLsp.Contracts.Models;
 
-// Hover (0-based line/character — LSP convention)
+// Always null-check — ClarionLsp may not be installed
 var client = ClarionLspLocator.Current;
 if (client == null || !client.IsRunning) return;
 
+// Hover (0-based line/character — LSP convention)
 HoverResult hover = await client.GetHoverAsync(filePath, line, character);
 if (hover != null)
     ShowTooltip(hover.Contents);
@@ -166,6 +178,32 @@ SymbolResult[] symbols = await client.GetDocumentSymbolsAsync(filePath);
 
 // Workspace symbol search
 SymbolResult[] results = await client.FindWorkspaceSymbolAsync("MyClass");
+```
+
+### How the runtime sharing works
+
+Your addin ships its own copy of `ClarionLsp.Contracts.dll` (because `Private=True`). That copy is only needed as a fallback. When **ClarionLsp is installed**:
+
+- ClarionLsp is an autostart addin — it loads first and puts `ClarionLsp.Contracts.dll` into the AppDomain
+- The CLR never loads the same assembly identity twice — your copy is ignored, the shared instance is used
+- `ClarionLspLocator.Current` is set by ClarionLsp and visible to your addin ✅
+
+When **ClarionLsp is not installed**:
+
+- Your copy of `ClarionLsp.Contracts.dll` loads
+- `ClarionLspLocator.Current` is never set → it is `null`
+- Your existing fallback connection takes over — nothing breaks ✅
+
+### Soft-dependency fallback pattern
+
+If your addin already manages its own LSP connection, try the shared service first:
+
+```csharp
+IClarionLanguageClient client = ClarionLspLocator.Current;
+if (client == null || !client.IsRunning)
+    client = MyOwnLspClient.Current;  // your existing connection
+
+if (client == null || !client.IsRunning) return;
 ```
 
 ### Line/character numbering
