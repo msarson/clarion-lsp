@@ -186,6 +186,19 @@ namespace ClarionLsp
             return SendRequest("workspace/symbol", new Dictionary<string, object> { { "query", query } });
         }
 
+        public Dictionary<string, object> PrepareRename(string filePath, int line, int character)
+        {
+            return SendTextDocumentPositionRequest("textDocument/prepareRename", filePath, line, character);
+        }
+
+        public Dictionary<string, object> Rename(string filePath, int line, int character, string newName)
+        {
+            EnsureDocumentOpen(filePath);
+            var parms = BuildTextDocumentPosition(filePath, line, character);
+            parms["newName"] = newName;
+            return SendRequest("textDocument/rename", parms);
+        }
+
         private void EnsureDocumentOpen(string filePath)
         {
             if (_openDocuments.Contains(filePath) || !File.Exists(filePath)) return;

@@ -97,6 +97,30 @@ namespace ClarionLsp
             });
         }
 
+        public Task<Range> PrepareRenameAsync(string filePath, int line, int character)
+        {
+            return Task.Run(() =>
+            {
+                Log($"PrepareRename {Path.GetFileName(filePath)} {line}:{character}");
+                var raw = _client.PrepareRename(filePath, line, character);
+                var result = ParsePrepareRename(raw);
+                Log("PrepareRename result: " + (result != null ? "range returned" : "null (not renameable)"));
+                return result;
+            });
+        }
+
+        public Task<RenameEdit[]> RenameAsync(string filePath, int line, int character, string newName)
+        {
+            return Task.Run(() =>
+            {
+                Log($"Rename {Path.GetFileName(filePath)} {line}:{character} newName={newName}");
+                var raw = _client.Rename(filePath, line, character, newName);
+                var result = ParseRenameEdits(raw);
+                Log("Rename result: " + result.Length + " edit(s)");
+                return result;
+            });
+        }
+
         // ── Response parsers ───────────────────────────────────────────────
 
         private static HoverResult ParseHover(Dictionary<string, object> raw)
@@ -132,6 +156,67 @@ namespace ClarionLsp
                 Log("ParseHover error: " + ex.Message);
                 return null;
             }
+        }
+
+        private static Range ParsePrepareRename(Dictionary<string, object> raw)
+        {
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null)
+                    return null;
+                var result = raw["result"] as Dictionary<string, object>;
+                if (result == null) return null;
+                // Server returns { range: {...}, placeholder: "..." }
+                var rangeObj = result.ContainsKey("range")
+                    ? result["range"] as Dictionary<string, object>
+                    : result;
+                return ParseRange(rangeObj);
+            }
+            catch (Exception ex)
+            {
+                Log("ParsePrepareRename error: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static RenameEdit[] ParseRenameEdits(Dictionary<string, object> raw)
+        {
+            var list = new List<RenameEdit>();
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null)
+                    return list.ToArray();
+                var result = raw["result"] as Dictionary<string, object>;
+                if (result == null) return list.ToArray();
+
+                // WorkspaceEdit.changes: { uri: TextEdit[] }
+                if (result.ContainsKey("changes") && result["changes"] is Dictionary<string, object> changes)
+                {
+                    foreach (var kvp in changes)
+                    {
+                        string filePath = LspClient.UriToFilePath(kvp.Key);
+                        var edits = kvp.Value as System.Collections.ArrayList;
+                        if (edits == null) continue;
+                        foreach (var edit in edits)
+                        {
+                            if (edit is Dictionary<string, object> te)
+                            {
+                                list.Add(new RenameEdit
+                                {
+                                    FilePath = filePath,
+                                    Range = ParseRange(te.ContainsKey("range") ? te["range"] as Dictionary<string, object> : null),
+                                    NewText = te.ContainsKey("newText") ? te["newText"]?.ToString() : null
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseRenameEdits error: " + ex.Message);
+            }
+            return list.ToArray();
         }
 
         private static LocationResult[] ParseLocations(Dictionary<string, object> raw)
