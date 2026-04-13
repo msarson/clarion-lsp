@@ -6,6 +6,16 @@
     <RootNamespace>ClarionLsp.Contracts</RootNamespace>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
+    <!-- NuGet package metadata -->
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageId>ClarionLsp.Contracts</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>msarson</Authors>
+    <Description>Shared interface contract for the ClarionLsp addin. Reference this from any Clarion IDE addin to consume hover, definition, references, and symbol queries from the Clarion Language Server without managing the server lifecycle yourself.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/msarson/clarion-lsp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/msarson/clarion-lsp</RepositoryUrl>
+    <PackageTags>clarion;sharpdevelop;lsp;language-server</PackageTags>
   </PropertyGroup>
 
   <Target Name="DeployContracts" AfterTargets="Build">

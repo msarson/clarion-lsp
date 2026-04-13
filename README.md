@@ -117,18 +117,19 @@ The Clarion IDE must be closed before deploying — DLLs are locked while the ID
 
 ## Consuming the API from another addin
 
-### 1. Reference `ClarionLsp.Contracts.dll`
+### 1. Reference `ClarionLsp.Contracts` via NuGet
 
-Add a reference in your `.csproj`:
-
-```xml
-<Reference Include="ClarionLsp.Contracts">
-  <HintPath>C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp\ClarionLsp.Contracts.dll</HintPath>
-  <Private>False</Private>
-</Reference>
+```powershell
+dotnet add package ClarionLsp.Contracts
 ```
 
-Set `<Private>False</Private>` so the DLL is not copied into your output — it lives in the IDE bin directory.
+Or add directly to your `.csproj`:
+
+```xml
+<PackageReference Include="ClarionLsp.Contracts" Version="1.0.0" />
+```
+
+Set `<Private>True</Private>` (the default) so the DLL is copied into your addin's output folder. This is intentional — if ClarionLsp is installed, its copy loads first (it's an autostart addin) and the CLR reuses that instance, so `ClarionLspLocator.Current` is shared. If ClarionLsp is *not* installed, your copy loads instead and `ClarionLspLocator.Current` remains null — your fallback path handles it.
 
 ### 2. Declare a soft dependency in your `.addin` manifest
 
