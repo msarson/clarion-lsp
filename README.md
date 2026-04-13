@@ -256,6 +256,55 @@ clarion-lsp/
 
 ---
 
+## Soft-dependency fallback pattern
+
+If your addin already has its own LSP connection (e.g. ClarionAssistant), you can adopt the shared service without breaking anything for users who haven't installed ClarionLsp yet:
+
+```csharp
+using ClarionLsp.Contracts;
+
+// Try shared service first; fall back to your own connection
+IClarionLanguageClient client = ClarionLspLocator.Current;
+if (client == null || !client.IsRunning)
+    client = MyOwnLspClient.Current;   // your existing fallback
+
+if (client == null || !client.IsRunning) return;
+
+var hover = await client.GetHoverAsync(filePath, line, character);
+```
+
+This means:
+- Users who **have** ClarionLsp installed share one server process
+- Users who **don't** have it fall back to your addin's own connection, exactly as before
+- No breaking change, no hard dependency
+
+To declare a soft dependency in your `.addin` manifest:
+```xml
+<Dependency addin="ClarionLsp" version="1.0" coerced="true"/>
+```
+
+`coerced="true"` tells SharpDevelop to load your addin even if ClarionLsp is absent.
+
+---
+
+## Roadmap / extending the interface
+
+Since Mark maintains both the VS Code extension (LSP server) and this addin, new server capabilities can be exposed immediately when they land — other addins pick them up without changes.
+
+To add a new capability:
+
+1. Add the method signature to `IClarionLanguageClient` in `ClarionLsp.Contracts`
+2. Add the result DTO to `ClarionLsp.Contracts/Models/` if needed
+3. Implement the method in `ClarionLspService` by calling the appropriate `_client.SendRequest(...)` method
+4. Bump the version in `ClarionLsp.addin`
+
+Planned future capabilities (not yet implemented):
+- `clarion/findUsages` — semantic find-usages distinct from text references
+- `clarion/callHierarchy` — incoming/outgoing call graph
+- `textDocument/completion` — code completion results
+
+---
+
 ## Notes for Clarion IDE addin developers
 
 - **`!!!` doc comments** — The Clarion language server reads `!!!` doc comments from `.inc`/`.clw` files. Triple-bang (`!!!`) marks a doc comment; quadruple-bang (`!!!!`) is treated as a regular comment. Comments before a declaration attach to that symbol. For methods, the definition's `.clw` comment takes priority over the declaration's `.inc` comment if both exist.
