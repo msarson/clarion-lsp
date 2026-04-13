@@ -6,9 +6,13 @@
     <RootNamespace>ClarionLsp.Contracts</RootNamespace>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
+    <Version>1.0.0</Version>
+    <Product>ClarionLsp.Contracts</Product>
+    <Description>Public interface contracts for ClarionLsp — IClarionLanguageClient and related models</Description>
+    <Company>msarson</Company>
   </PropertyGroup>
 
-  <Target Name="DeployContracts" AfterTargets="Build">
+  <Target Name="DeployContracts" AfterTargets="Build" Condition="'$(DoRelease)' != 'true'">
     <MakeDir Directories="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp" />
     <Copy SourceFiles="$(OutputPath)ClarionLsp.Contracts.dll"
           DestinationFolder="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp"
@@ -16,3 +20,4 @@
   </Target>
 
 </Project>
+

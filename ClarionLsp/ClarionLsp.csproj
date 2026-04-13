@@ -7,6 +7,10 @@
     <RootNamespace>ClarionLsp</RootNamespace>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
+    <Version>1.0.0</Version>
+    <Product>ClarionLsp</Product>
+    <Description>Shared Clarion LSP addin — manages the language server lifecycle and exposes IClarionLanguageClient</Description>
+    <Company>msarson</Company>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,7 +31,7 @@
     </ProjectReference>
   </ItemGroup>
 
-  <Target Name="DeployAddin" AfterTargets="Build">
+  <Target Name="DeployAddin" AfterTargets="Build" Condition="'$(DoRelease)' != 'true'">
     <MakeDir Directories="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp" />
     <Copy SourceFiles="$(OutputPath)ClarionLsp.dll"
           DestinationFolder="C:\Clarion\Clarion11.1\accessory\addins\ClarionLsp"
@@ -37,4 +41,30 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!--
+    Release target — run with: dotnet build ClarionLsp.csproj -c Release /p:DoRelease=true
+    Requires: gh CLI authenticated, git remote configured
+  -->
+  <Target Name="CreateRelease" AfterTargets="Build" Condition="'$(DoRelease)' == 'true' AND '$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <ContractsDll>$(MSBuildProjectDirectory)\..\ClarionLsp.Contracts\bin\$(Configuration)\$(TargetFramework)\ClarionLsp.Contracts.dll</ContractsDll>
+      <ZipPath>$(MSBuildProjectDirectory)\..\ClarionLsp-v$(Version).zip</ZipPath>
+    </PropertyGroup>
+
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(OutputPath)ClarionLsp.dll','$(ContractsDll)','$(MSBuildProjectDirectory)\ClarionLsp.addin' -DestinationPath '$(ZipPath)' -Force&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+
+    <Exec Command="git diff --quiet || git commit -am &quot;chore: release v$(Version) [skip ci]&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)\.." IgnoreExitCode="true" />
+    <Exec Command="git push" WorkingDirectory="$(MSBuildProjectDirectory)\.." />
+    <Exec Command="git tag v$(Version)" WorkingDirectory="$(MSBuildProjectDirectory)\.." />
+    <Exec Command="git push origin v$(Version)" WorkingDirectory="$(MSBuildProjectDirectory)\.." />
+
+    <Exec Command="gh release create v$(Version) &quot;$(OutputPath)ClarionLsp.dll&quot; &quot;$(ContractsDll)&quot; &quot;$(MSBuildProjectDirectory)\ClarionLsp.addin&quot; &quot;$(ZipPath)&quot; --title &quot;v$(Version)&quot; --notes-file &quot;$(MSBuildProjectDirectory)\..\CHANGELOG.md&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)\.." />
+
+    <Message Text="✅ Released ClarionLsp v$(Version) to GitHub." Importance="high" />
+  </Target>
+
 </Project>
+
