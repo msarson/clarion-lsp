@@ -75,10 +75,10 @@ All log output goes to `OutputDebugString` (visible in [DebugView](https://learn
 
 ### ClarionBin property
 
-Both projects reference Clarion IDE assemblies via `$(ClarionBin)`. The repo ships a `Directory.Build.props` with a default path of `C:\Clarion\Clarion11.1\bin`. If your Clarion is installed elsewhere, override it without touching the committed file:
+Both projects reference Clarion IDE assemblies via `$(ClarionBin)`. Clarion can be installed anywhere, so you **must** set this for your machine before building:
 
 1. Copy `Directory.Build.props.user.template` → `Directory.Build.props.user` (already gitignored)
-2. Edit the path inside it:
+2. Edit the path inside it to match your Clarion installation:
 
 ```xml
 <Project>
@@ -88,7 +88,7 @@ Both projects reference Clarion IDE assemblies via `$(ClarionBin)`. The repo shi
 </Project>
 ```
 
-`Directory.Build.props.user` is imported automatically by `Directory.Build.props` when it exists and takes priority over the default. Never commit it — it's personal to your machine.
+`Directory.Build.props.user` is imported automatically and takes priority over the committed defaults. Never commit it — it's personal to your machine.
 
 ### Build
 
