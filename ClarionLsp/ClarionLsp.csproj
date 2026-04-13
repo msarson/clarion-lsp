@@ -60,7 +60,7 @@
     <Exec Command="git tag v$(Version)" WorkingDirectory="$(MSBuildProjectDirectory)\.." />
     <Exec Command="git push origin v$(Version)" WorkingDirectory="$(MSBuildProjectDirectory)\.." />
 
-    <Exec Command="gh release create v$(Version) &quot;$(OutputPath)ClarionLsp.dll&quot; &quot;$(ContractsDll)&quot; &quot;$(MSBuildProjectDirectory)\ClarionLsp.addin&quot; &quot;$(ZipPath)&quot; --title &quot;v$(Version)&quot; --notes-file &quot;$(MSBuildProjectDirectory)\..\CHANGELOG.md&quot;"
+    <Exec Command="gh release create v$(Version) &quot;$(MSBuildProjectDirectory)\$(OutputPath)ClarionLsp.dll&quot; &quot;$(ContractsDll)&quot; &quot;$(MSBuildProjectDirectory)\ClarionLsp.addin&quot; &quot;$(ZipPath)&quot; --title &quot;v$(Version)&quot; --notes-file &quot;$(MSBuildProjectDirectory)\..\CHANGELOG.md&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)\.." />
 
     <Message Text="✅ Released ClarionLsp v$(Version) to GitHub." Importance="high" />
