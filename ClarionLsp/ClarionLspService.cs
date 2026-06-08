@@ -14,6 +14,20 @@ namespace ClarionLsp
 
         public bool IsRunning => _client.IsRunning;
 
+        public event Action<string, DiagnosticResult[]> DiagnosticsPublished;
+
+        public ClarionLspService()
+        {
+            // Bridge the client's raw publishDiagnostics into the public typed event.
+            _client.DiagnosticsReceived += (filePath, raw) =>
+            {
+                var handler = DiagnosticsPublished;
+                if (handler == null) return;
+                try { handler(filePath, ParseDiagnostics(raw)); }
+                catch (Exception ex) { Log("DiagnosticsPublished handler error: " + ex.Message); }
+            };
+        }
+
         internal bool Start(string serverJsPath, string workspaceUri, string workspaceName,
             Dictionary<string, object> updatePaths)
         {
@@ -118,6 +132,40 @@ namespace ClarionLsp
                 var result = ParseRenameEdits(raw);
                 Log("Rename result: " + result.Length + " edit(s)");
                 return result;
+            });
+        }
+
+        public Task<CompletionResult[]> GetCompletionAsync(string filePath, int line, int character, string bufferText = null, int timeoutMs = 3000)
+        {
+            return Task.Run(() =>
+            {
+                Log($"GetCompletion {Path.GetFileName(filePath)} {line}:{character}" + (bufferText != null ? " (buffer)" : ""));
+                if (!string.IsNullOrEmpty(bufferText)) _client.SyncBuffer(filePath, bufferText);
+                var raw = _client.GetCompletion(filePath, line, character, timeoutMs);
+                var result = ParseCompletion(raw);
+                Log("GetCompletion result: " + result.Length + " item(s)");
+                return result;
+            });
+        }
+
+        public Task<DiagnosticResult[]> GetDiagnosticsAsync(string filePath, string bufferText = null, int timeoutMs = 3000)
+        {
+            return Task.Run(() =>
+            {
+                Log("GetDiagnostics " + Path.GetFileName(filePath) + (bufferText != null ? " (buffer)" : ""));
+                var raw = _client.GetDiagnostics(filePath, bufferText, timeoutMs);
+                var result = ParseDiagnostics(raw);
+                Log("GetDiagnostics result: " + result.Length + " diagnostic(s)");
+                return result;
+            });
+        }
+
+        public Task NotifyBufferChangedAsync(string filePath, string bufferText)
+        {
+            return Task.Run(() =>
+            {
+                Log("NotifyBufferChanged " + Path.GetFileName(filePath) + " (" + (bufferText?.Length ?? 0) + " chars)");
+                _client.SyncBuffer(filePath, bufferText);
             });
         }
 
@@ -330,6 +378,129 @@ namespace ClarionLsp
                 Log("ParseWorkspaceSymbols error: " + ex.Message);
             }
             return list.ToArray();
+        }
+
+        private static CompletionResult[] ParseCompletion(Dictionary<string, object> raw)
+        {
+            var list = new List<CompletionResult>();
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null)
+                    return list.ToArray();
+
+                // result is either CompletionItem[] or a CompletionList { items: [...] }.
+                object result = raw["result"];
+                var items = result as System.Collections.ArrayList;
+                if (items == null)
+                {
+                    var asList = result as Dictionary<string, object>;
+                    if (asList != null && asList.ContainsKey("items"))
+                        items = asList["items"] as System.Collections.ArrayList;
+                }
+                if (items == null) return list.ToArray();
+
+                foreach (var obj in items)
+                {
+                    if (!(obj is Dictionary<string, object> d)) continue;
+
+                    string documentation = null;
+                    if (d.ContainsKey("documentation"))
+                    {
+                        var docVal = d["documentation"];
+                        documentation = docVal as string;
+                        if (documentation == null && docVal is Dictionary<string, object> md && md.ContainsKey("value"))
+                            documentation = md["value"]?.ToString();
+                    }
+
+                    var ci = new CompletionResult
+                    {
+                        Label = d.ContainsKey("label") ? d["label"]?.ToString() : null,
+                        Kind = CompletionKindName(d.ContainsKey("kind") ? d["kind"] : null),
+                        Detail = d.ContainsKey("detail") ? d["detail"]?.ToString() : null,
+                        Documentation = documentation,
+                        InsertText = d.ContainsKey("insertText") ? d["insertText"]?.ToString() : null
+                    };
+                    if (!string.IsNullOrEmpty(ci.Label)) list.Add(ci);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseCompletion error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static DiagnosticResult[] ParseDiagnostics(List<Dictionary<string, object>> raw)
+        {
+            var list = new List<DiagnosticResult>();
+            if (raw == null) return list.ToArray();
+            try
+            {
+                foreach (var d in raw)
+                {
+                    if (d == null) continue;
+                    list.Add(new DiagnosticResult
+                    {
+                        Severity = SeverityName(d.ContainsKey("severity") ? d["severity"] : null),
+                        Message = d.ContainsKey("message") ? d["message"]?.ToString() : null,
+                        Source = d.ContainsKey("source") ? d["source"]?.ToString() : null,
+                        Range = ParseRange(d.ContainsKey("range") ? d["range"] as Dictionary<string, object> : null)
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseDiagnostics error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static string SeverityName(object severity)
+        {
+            if (severity == null) return "Error";
+            switch (Convert.ToInt32(severity))
+            {
+                case 1: return "Error";
+                case 2: return "Warning";
+                case 3: return "Information";
+                case 4: return "Hint";
+                default: return "Error";
+            }
+        }
+
+        private static string CompletionKindName(object kind)
+        {
+            if (kind == null) return "Text";
+            // LSP CompletionItemKind: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#completionItemKind
+            switch (Convert.ToInt32(kind))
+            {
+                case 1: return "Text";
+                case 2: return "Method";
+                case 3: return "Function";
+                case 4: return "Constructor";
+                case 5: return "Field";
+                case 6: return "Variable";
+                case 7: return "Class";
+                case 8: return "Interface";
+                case 9: return "Module";
+                case 10: return "Property";
+                case 11: return "Unit";
+                case 12: return "Value";
+                case 13: return "Enum";
+                case 14: return "Keyword";
+                case 15: return "Snippet";
+                case 16: return "Color";
+                case 17: return "File";
+                case 18: return "Reference";
+                case 19: return "Folder";
+                case 20: return "EnumMember";
+                case 21: return "Constant";
+                case 22: return "Struct";
+                case 23: return "Event";
+                case 24: return "Operator";
+                case 25: return "TypeParameter";
+                default: return "Text";
+            }
         }
 
         private static Range ParseRange(Dictionary<string, object> raw)

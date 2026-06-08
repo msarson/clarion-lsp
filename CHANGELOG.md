@@ -2,6 +2,16 @@
 
 All notable changes to ClarionLsp will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- `IClarionLanguageClient.GetCompletionAsync` — code completion at a position, with an optional `bufferText` parameter for scope-aware completion against live/unsaved editor content
+- `IClarionLanguageClient.GetDiagnosticsAsync` — triggers a fresh analysis and returns the server's diagnostics for a file (with optional `bufferText`); empty array means a clean file
+- `IClarionLanguageClient.NotifyBufferChangedAsync` — push live unsaved buffer text to the server (didOpen/full didChange) so requests and diagnostics reflect in-memory edits; no-op when unchanged
+- `IClarionLanguageClient.DiagnosticsPublished` event — push model for live squiggles, raised on every `textDocument/publishDiagnostics`
+- `CompletionResult` and `DiagnosticResult` DTOs in `ClarionLsp.Contracts.Models`
+- `LspClient` now dispatches server-initiated `textDocument/publishDiagnostics` notifications (previously only request/response messages were handled) and tracks per-document versions for incremental `didChange`
+
 ## [1.0.0] - 2026-03-17
 
 ### Added
