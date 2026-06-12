@@ -23,7 +23,8 @@ namespace ClarionLsp
 
         // Open documents tracked by URI-able file path → last sent version (didOpen=1, then ++ per didChange).
         private readonly Dictionary<string, int> _openDocuments = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, int> _lastSyncedHash = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // Content key of the last text synced per document, used to skip needless re-tokenizes.
+        private readonly Dictionary<string, long> _lastSyncedHash = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         private readonly object _docSyncLock = new object();
 
         // Diagnostics cache, keyed by canonical URI, populated by textDocument/publishDiagnostics.
@@ -242,11 +243,15 @@ namespace ClarionLsp
                 set.Ready.Reset();
             }
 
-            if (!string.IsNullOrEmpty(bufferText)) SyncBuffer(filePath, bufferText);
-            else if (_openDocuments.ContainsKey(filePath)) SyncFromDisk(filePath);
-            else EnsureDocumentOpen(filePath);
+            bool triggered;
+            if (!string.IsNullOrEmpty(bufferText)) triggered = SyncBuffer(filePath, bufferText);
+            else if (IsDocumentOpen(filePath)) triggered = SyncFromDisk(filePath);
+            else triggered = EnsureDocumentOpen(filePath);
 
-            set.Ready.Wait(timeoutMs);
+            // Only wait for a fresh publish if we actually changed something on the server.
+            // If nothing changed, no new diagnostics are coming — return the last-known set now
+            // instead of blocking for the full timeout on every unchanged-buffer poll.
+            if (triggered) set.Ready.Wait(timeoutMs);
 
             lock (_diagnosticsLock)
                 return set.Raw != null
@@ -254,15 +259,27 @@ namespace ClarionLsp
                     : new List<Dictionary<string, object>>();
         }
 
-        private void EnsureDocumentOpen(string filePath)
+        /// <summary>Thread-safe check of whether a document has been opened on the server.</summary>
+        private bool IsDocumentOpen(string filePath)
+        {
+            lock (_docSyncLock) return _openDocuments.ContainsKey(filePath);
+        }
+
+        /// <summary>
+        /// Open the on-disk file on the server if not already open. Returns true if a didOpen
+        /// was actually sent (so a fresh publishDiagnostics is expected), false if it was already
+        /// open or the file is missing.
+        /// </summary>
+        private bool EnsureDocumentOpen(string filePath)
         {
             lock (_docSyncLock)
             {
-                if (_openDocuments.ContainsKey(filePath) || !File.Exists(filePath)) return;
+                if (_openDocuments.ContainsKey(filePath) || !File.Exists(filePath)) return false;
 
                 string ext = Path.GetExtension(filePath).ToLowerInvariant();
                 string langId = (ext == ".inc" || ext == ".clw" || ext == ".equ") ? "clarion" : "plaintext";
 
+                string text = File.ReadAllText(filePath);
                 SendNotification("textDocument/didOpen", new Dictionary<string, object>
                 {
                     { "textDocument", new Dictionary<string, object>
@@ -270,11 +287,13 @@ namespace ClarionLsp
                             { "uri", FilePathToUri(filePath) },
                             { "languageId", langId },
                             { "version", 1 },
-                            { "text", File.ReadAllText(filePath) }
+                            { "text", text }
                         }
                     }
                 });
                 _openDocuments[filePath] = 1;
+                _lastSyncedHash[filePath] = ContentKey(text);
+                return true;
             }
         }
 
@@ -283,23 +302,25 @@ namespace ClarionLsp
         /// server: didOpen on first sight, otherwise a full-document didChange with an
         /// incremented version. No-op if the text is unchanged since the last sync, so it is
         /// cheap to call on an editor change/idle timer. Triggers re-validation (and a
-        /// subsequent textDocument/publishDiagnostics) on the server.
+        /// subsequent textDocument/publishDiagnostics) on the server. Returns true if a
+        /// didOpen/didChange was actually sent (so a fresh publish is expected), false if the
+        /// text was unchanged since the last sync (no-op).
         /// </summary>
-        public void SyncBuffer(string filePath, string text)
+        public bool SyncBuffer(string filePath, string text)
         {
-            if (!IsRunning || string.IsNullOrEmpty(filePath) || text == null) return;
+            if (!IsRunning || string.IsNullOrEmpty(filePath) || text == null) return false;
 
             lock (_docSyncLock)
             {
                 string uri = FilePathToUri(filePath);
-                int hash = text.Length ^ text.GetHashCode();
+                long key = ContentKey(text);
 
                 int currentVersion;
                 if (_openDocuments.TryGetValue(filePath, out currentVersion))
                 {
-                    int lastHash;
-                    if (_lastSyncedHash.TryGetValue(filePath, out lastHash) && lastHash == hash)
-                        return; // unchanged — avoid a needless re-tokenize
+                    long lastKey;
+                    if (_lastSyncedHash.TryGetValue(filePath, out lastKey) && lastKey == key)
+                        return false; // unchanged — avoid a needless re-tokenize
 
                     int nextVersion = currentVersion + 1;
                     SendNotification("textDocument/didChange", new Dictionary<string, object>
@@ -308,8 +329,8 @@ namespace ClarionLsp
                         { "contentChanges", new object[] { new Dictionary<string, object> { { "text", text } } } }
                     });
                     _openDocuments[filePath] = nextVersion;
-                    _lastSyncedHash[filePath] = hash;
-                    return;
+                    _lastSyncedHash[filePath] = key;
+                    return true;
                 }
 
                 string ext = Path.GetExtension(filePath).ToLowerInvariant();
@@ -323,19 +344,26 @@ namespace ClarionLsp
                     }
                 });
                 _openDocuments[filePath] = 1;
-                _lastSyncedHash[filePath] = hash;
+                _lastSyncedHash[filePath] = key;
+                return true;
             }
         }
+
+        // 64-bit content key: high 32 bits = length, low 32 bits = string hash. Folding length in
+        // means two buffers of different length can never collide, so a real edit is only ever
+        // missed on a genuine 32-bit hash collision between two same-length buffers.
+        private static long ContentKey(string text) => ((long)text.Length << 32) | (uint)text.GetHashCode();
 
         /// <summary>
         /// Force the server to re-analyze an already-open file using its current on-disk
         /// contents (full-document didChange). Falls through to didOpen if not yet open.
+        /// Returns true if an update was actually sent (disk content differed from last sync).
         /// </summary>
-        private void SyncFromDisk(string filePath)
+        private bool SyncFromDisk(string filePath)
         {
-            if (!File.Exists(filePath)) return;
-            try { SyncBuffer(filePath, File.ReadAllText(filePath)); }
-            catch { }
+            if (!File.Exists(filePath)) return false;
+            try { return SyncBuffer(filePath, File.ReadAllText(filePath)); }
+            catch { return false; }
         }
 
         private Dictionary<string, object> SendTextDocumentPositionRequest(string method, string filePath, int line, int character)
