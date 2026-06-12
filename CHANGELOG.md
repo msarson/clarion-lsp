@@ -2,7 +2,7 @@
 
 All notable changes to ClarionLsp will be documented in this file.
 
-## [Unreleased]
+## [1.1.0] - 2026-06-12
 
 ### Added
 - `IClarionLanguageClient.GetCompletionAsync` — code completion at a position, with an optional `bufferText` parameter for scope-aware completion against live/unsaved editor content
