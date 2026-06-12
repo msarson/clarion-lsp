@@ -1,6 +1,6 @@
 # ClarionLsp
 
-A shared SharpDevelop addin that manages the [Clarion Language Server](https://github.com/msarson/clarion-extensions) lifecycle inside the Clarion IDE, and exposes a clean public API (`IClarionLanguageClient`) so any other addin can query hover text, go-to-definition, find-references, and document/workspace symbols — without knowing anything about LSP internals.
+A shared SharpDevelop addin that manages the [Clarion Language Server](https://github.com/msarson/clarion-extensions) lifecycle inside the Clarion IDE, and exposes a clean public API (`IClarionLanguageClient`) so any other addin can query hover text, go-to-definition, find-references, document/workspace symbols, rename, code completion, and diagnostics — without knowing anything about LSP internals.
 
 ---
 
@@ -24,6 +24,10 @@ ClarionLsp             ← the addin dll — manages server process + JSON-RPC
 | Find all references | `textDocument/references` |
 | Document symbols | `textDocument/documentSymbol` |
 | Workspace symbol search | `workspace/symbol` |
+| Rename (with prepare) | `textDocument/prepareRename`, `textDocument/rename` |
+| Code completion | `textDocument/completion` |
+| Diagnostics (pull + push) | `textDocument/publishDiagnostics` |
+| Live unsaved-buffer sync | `textDocument/didOpen`, `textDocument/didChange` |
 
 ---
 
@@ -240,6 +244,22 @@ public interface IClarionLanguageClient
     Task<LocationResult[]> GetReferencesAsync(string filePath, int line, int character, bool includeDeclaration = true);
     Task<SymbolResult[]>   GetDocumentSymbolsAsync(string filePath);
     Task<SymbolResult[]>   FindWorkspaceSymbolAsync(string query);
+
+    // Rename
+    Task<Range>            PrepareRenameAsync(string filePath, int line, int character);
+    Task<RenameEdit[]>     RenameAsync(string filePath, int line, int character, string newName);
+
+    // Completion (pass bufferText for scope-aware completion against live/unsaved content)
+    Task<CompletionResult[]> GetCompletionAsync(string filePath, int line, int character, string bufferText = null, int timeoutMs = 3000);
+
+    // Diagnostics — pull: triggers a fresh analysis and waits for the publish (empty = clean file)
+    Task<DiagnosticResult[]> GetDiagnosticsAsync(string filePath, string bufferText = null, int timeoutMs = 3000);
+
+    // Live buffer sync — push unsaved editor text; no-op when unchanged
+    Task NotifyBufferChangedAsync(string filePath, string bufferText);
+
+    // Diagnostics — push: raised on every server publish (for live squiggles)
+    event Action<string, DiagnosticResult[]> DiagnosticsPublished;
 }
 ```
 
@@ -266,6 +286,25 @@ public interface IClarionLanguageClient
 | `FilePath` | `string` | Absolute file path |
 | `Range` | `Range` | Symbol location |
 | `ContainerName` | `string` | Enclosing class/procedure name (may be null) |
+
+### `CompletionResult`
+
+| Property | Type | Description |
+|---|---|---|
+| `Label` | `string` | Display text of the completion item |
+| `Kind` | `string` | Human-readable kind: `"Method"`, `"Variable"`, `"Keyword"`, etc. |
+| `Detail` | `string` | Short type/signature detail (may be null) |
+| `Documentation` | `string` | Doc text for the item (may be null) |
+| `InsertText` | `string` | Text to insert if it differs from `Label` (may be null) |
+
+### `DiagnosticResult`
+
+| Property | Type | Description |
+|---|---|---|
+| `Severity` | `string` | `"Error"`, `"Warning"`, `"Information"`, or `"Hint"` |
+| `Message` | `string` | The diagnostic message |
+| `Source` | `string` | Producer of the diagnostic (may be null) |
+| `Range` | `Range` | 0-based location the diagnostic applies to |
 
 ### `Range` / `Position`
 
@@ -296,7 +335,9 @@ clarion-lsp/
     └── Models/
         ├── HoverResult.cs
         ├── LocationResult.cs
-        └── SymbolResult.cs
+        ├── SymbolResult.cs
+        ├── CompletionResult.cs
+        └── DiagnosticResult.cs
 ```
 
 ---
@@ -346,7 +387,8 @@ To add a new capability:
 Planned future capabilities (not yet implemented):
 - `clarion/findUsages` — semantic find-usages distinct from text references
 - `clarion/callHierarchy` — incoming/outgoing call graph
-- `textDocument/completion` — code completion results
+
+Recently shipped (v1.1.0): code completion, diagnostics (pull + push), and live unsaved-buffer sync.
 
 ---
 
