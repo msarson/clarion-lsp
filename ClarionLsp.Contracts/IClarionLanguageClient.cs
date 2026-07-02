@@ -10,9 +10,20 @@ namespace ClarionLsp.Contracts
 
         Task<HoverResult> GetHoverAsync(string filePath, int line, int character, int timeoutMs = 3000);
         Task<LocationResult[]> GetDefinitionAsync(string filePath, int line, int character);
+
+        /// <summary>Implementation location(s) for the symbol (LSP textDocument/implementation). For Clarion,
+        /// this resolves a method's declaration (.inc) to its implementation body (.clw). 0-based coords.</summary>
+        Task<LocationResult[]> GetImplementationAsync(string filePath, int line, int character);
+
         Task<LocationResult[]> GetReferencesAsync(string filePath, int line, int character, bool includeDeclaration = true);
         Task<SymbolResult[]> GetDocumentSymbolsAsync(string filePath);
         Task<SymbolResult[]> FindWorkspaceSymbolAsync(string query);
+
+        /// <summary>
+        /// Collapsible regions for the file (LSP textDocument/foldingRange). Lines are 0-based. For
+        /// in-memory/synthetic buffers, push the buffer via <see cref="NotifyBufferChangedAsync"/> first.
+        /// </summary>
+        Task<FoldingRange[]> GetFoldingRangesAsync(string filePath);
 
         /// <summary>Returns the range of the symbol under the cursor, or null if it cannot be renamed.</summary>
         Task<Range> PrepareRenameAsync(string filePath, int line, int character);

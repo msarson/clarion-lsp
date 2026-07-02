@@ -177,6 +177,11 @@ namespace ClarionLsp
             return SendTextDocumentPositionRequest("textDocument/definition", filePath, line, character);
         }
 
+        public Dictionary<string, object> GetImplementation(string filePath, int line, int character)
+        {
+            return SendTextDocumentPositionRequest("textDocument/implementation", filePath, line, character);
+        }
+
         public Dictionary<string, object> GetReferences(string filePath, int line, int character, bool includeDeclaration = true)
         {
             EnsureDocumentOpen(filePath);
@@ -193,6 +198,16 @@ namespace ClarionLsp
                 { "textDocument", new Dictionary<string, object> { { "uri", FilePathToUri(filePath) } } }
             };
             return SendRequest("textDocument/documentSymbol", parms);
+        }
+
+        public Dictionary<string, object> GetFoldingRanges(string filePath)
+        {
+            EnsureDocumentOpen(filePath);
+            var parms = new Dictionary<string, object>
+            {
+                { "textDocument", new Dictionary<string, object> { { "uri", FilePathToUri(filePath) } } }
+            };
+            return SendRequest("textDocument/foldingRange", parms);
         }
 
         public Dictionary<string, object> FindWorkspaceSymbol(string query)

@@ -75,6 +75,18 @@ namespace ClarionLsp
             });
         }
 
+        public Task<LocationResult[]> GetImplementationAsync(string filePath, int line, int character)
+        {
+            return Task.Run(() =>
+            {
+                Log($"GetImplementation {Path.GetFileName(filePath)} {line}:{character}");
+                var raw = _client.GetImplementation(filePath, line, character);
+                var result = ParseLocations(raw);
+                Log("GetImplementation result: " + result.Length + " location(s)");
+                return result;
+            });
+        }
+
         public Task<LocationResult[]> GetReferencesAsync(string filePath, int line, int character, bool includeDeclaration = true)
         {
             return Task.Run(() =>
@@ -107,6 +119,18 @@ namespace ClarionLsp
                 var raw = _client.FindWorkspaceSymbol(query);
                 var result = ParseWorkspaceSymbols(raw);
                 Log("FindWorkspaceSymbol result: " + result.Length + " symbol(s)");
+                return result;
+            });
+        }
+
+        public Task<FoldingRange[]> GetFoldingRangesAsync(string filePath)
+        {
+            return Task.Run(() =>
+            {
+                Log("GetFoldingRanges " + Path.GetFileName(filePath));
+                var raw = _client.GetFoldingRanges(filePath);
+                var result = ParseFoldingRanges(raw);
+                Log("GetFoldingRanges result: " + result.Length + " range(s)");
                 return result;
             });
         }
@@ -334,6 +358,45 @@ namespace ClarionLsp
             catch (Exception ex)
             {
                 Log("ParseDocumentSymbols error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static FoldingRange[] ParseFoldingRanges(Dictionary<string, object> raw)
+        {
+            var list = new List<FoldingRange>();
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null)
+                    return list.ToArray();
+
+                var items = raw["result"] as System.Collections.ArrayList;
+                if (items == null) return list.ToArray();
+
+                foreach (var item in items)
+                {
+                    if (item is Dictionary<string, object> fr)
+                    {
+                        int ToInt(string key)
+                        {
+                            if (fr.ContainsKey(key) && fr[key] != null)
+                            {
+                                try { return Convert.ToInt32(fr[key]); } catch { }
+                            }
+                            return 0;
+                        }
+                        list.Add(new FoldingRange
+                        {
+                            StartLine = ToInt("startLine"),
+                            EndLine = ToInt("endLine"),
+                            Kind = fr.ContainsKey("kind") ? fr["kind"]?.ToString() : null
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseFoldingRanges error: " + ex.Message);
             }
             return list.ToArray();
         }
