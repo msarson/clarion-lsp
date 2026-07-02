@@ -39,6 +39,55 @@ namespace ClarionLsp.Contracts
         Task<CompletionResult[]> GetCompletionAsync(string filePath, int line, int character, string bufferText = null, int timeoutMs = 3000);
 
         /// <summary>
+        /// Parameter hints for the call at a position (LSP textDocument/signatureHelp). Triggered
+        /// while typing a call's arguments ('(' and ',' are the natural triggers). Pass
+        /// <paramref name="bufferText"/> to resolve against the live unsaved buffer. Returns null
+        /// when the cursor is not inside a resolvable call.
+        /// </summary>
+        Task<SignatureHelpResult> GetSignatureHelpAsync(string filePath, int line, int character, string bufferText = null, int timeoutMs = 3000);
+
+        /// <summary>Occurrences of the symbol under the cursor within the file (LSP
+        /// textDocument/documentHighlight), for highlight-all-references-in-file. 0-based coords.</summary>
+        Task<DocumentHighlight[]> GetDocumentHighlightsAsync(string filePath, int line, int character);
+
+        /// <summary>
+        /// Whole-document formatting edits (LSP textDocument/formatting). Returns the text edits the
+        /// caller should apply; an empty array means the server had nothing to change.
+        /// </summary>
+        Task<TextEdit[]> FormatDocumentAsync(string filePath, int tabSize = 4, bool insertSpaces = false);
+
+        /// <summary>
+        /// Smart-selection ranges (LSP textDocument/selectionRange) for each supplied position — the
+        /// nested syntactic ranges used by expand/shrink-selection. The result is parallel to
+        /// <paramref name="positions"/> (one <see cref="SelectionRange"/> chain per position).
+        /// </summary>
+        Task<SelectionRange[]> GetSelectionRangesAsync(string filePath, Position[] positions);
+
+        /// <summary>
+        /// Code actions / quick-fixes available for a range (LSP textDocument/codeAction). The
+        /// diagnostics overlapping the range are attached automatically as context, so the caller
+        /// need only supply the range. Most Clarion actions carry a <see cref="CodeActionResult.Command"/>
+        /// to run via <see cref="ExecuteCommandAsync"/>.
+        /// </summary>
+        Task<CodeActionResult[]> GetCodeActionsAsync(string filePath, Range range);
+
+        /// <summary>Code lenses for the file (LSP textDocument/codeLens). Lenses whose command is
+        /// computed lazily come back with a null command — resolve them via <see cref="ResolveCodeLensAsync"/>.</summary>
+        Task<CodeLensResult[]> GetCodeLensesAsync(string filePath);
+
+        /// <summary>Resolve a lazily-computed code lens (LSP codeLens/resolve), filling in its
+        /// <see cref="CodeLensResult.Command"/>. Pass a lens returned by <see cref="GetCodeLensesAsync"/> unchanged.</summary>
+        Task<CodeLensResult> ResolveCodeLensAsync(CodeLensResult lens);
+
+        /// <summary>
+        /// Execute a server command (LSP workspace/executeCommand), e.g. a code action's command. The
+        /// server performs the work and applies any resulting changes by raising
+        /// <see cref="ApplyEditRequested"/> (auto-acknowledged by the addin). Returns true if the
+        /// request completed without error/timeout.
+        /// </summary>
+        Task<bool> ExecuteCommandAsync(string command, object[] arguments);
+
+        /// <summary>
         /// Latest diagnostics for the file. Triggers a fresh server analysis and waits up to
         /// <paramref name="timeoutMs"/> for the resulting publish. Pass <paramref name="bufferText"/>
         /// to analyze live unsaved content. An empty array means the server reported a clean file.
@@ -57,5 +106,12 @@ namespace ClarionLsp.Contracts
         /// squiggles). Arguments are the file path and the diagnostics for it (empty = clean).
         /// </summary>
         event Action<string, DiagnosticResult[]> DiagnosticsPublished;
+
+        /// <summary>
+        /// Raised when the server asks the client to apply a workspace edit (LSP workspace/applyEdit),
+        /// typically as the effect of an <see cref="ExecuteCommandAsync"/> call. The addin
+        /// auto-acknowledges the server; a subscriber applies the edits to the live buffers/files.
+        /// </summary>
+        event Action<WorkspaceApplyEdit> ApplyEditRequested;
     }
 }

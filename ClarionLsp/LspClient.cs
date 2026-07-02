@@ -36,6 +36,11 @@ namespace ClarionLsp
         /// <summary>Raised when the server publishes diagnostics: (filePath, raw diagnostic dicts).</summary>
         public event Action<string, List<Dictionary<string, object>>> DiagnosticsReceived;
 
+        /// <summary>Raised when the server requests a workspace edit (workspace/applyEdit reverse-request):
+        /// carries the raw params dict ({ label?, edit }). The reader thread auto-acknowledges the server
+        /// separately; this event lets a consumer apply the edits.</summary>
+        public event Action<Dictionary<string, object>> ApplyEditReceived;
+
         public bool IsRunning => _running && _process != null && !_process.HasExited;
 
         public void SetUpdatePaths(Dictionary<string, object> updatePaths)
@@ -232,6 +237,116 @@ namespace ClarionLsp
         {
             EnsureDocumentOpen(filePath);
             return SendRequest("textDocument/completion", BuildTextDocumentPosition(filePath, line, character), timeoutMs);
+        }
+
+        public Dictionary<string, object> GetSignatureHelp(string filePath, int line, int character, int timeoutMs = 3000)
+        {
+            EnsureDocumentOpen(filePath);
+            return SendRequest("textDocument/signatureHelp", BuildTextDocumentPosition(filePath, line, character), timeoutMs);
+        }
+
+        public Dictionary<string, object> GetDocumentHighlights(string filePath, int line, int character)
+        {
+            EnsureDocumentOpen(filePath);
+            return SendRequest("textDocument/documentHighlight", BuildTextDocumentPosition(filePath, line, character));
+        }
+
+        public Dictionary<string, object> FormatDocument(string filePath, int tabSize, bool insertSpaces)
+        {
+            EnsureDocumentOpen(filePath);
+            var parms = new Dictionary<string, object>
+            {
+                { "textDocument", new Dictionary<string, object> { { "uri", FilePathToUri(filePath) } } },
+                { "options", new Dictionary<string, object> { { "tabSize", tabSize }, { "insertSpaces", insertSpaces } } }
+            };
+            return SendRequest("textDocument/formatting", parms, 15000);
+        }
+
+        public Dictionary<string, object> GetSelectionRanges(string filePath, IEnumerable<Dictionary<string, object>> positions)
+        {
+            EnsureDocumentOpen(filePath);
+            var posArray = new List<object>();
+            foreach (var p in positions) posArray.Add(p);
+            var parms = new Dictionary<string, object>
+            {
+                { "textDocument", new Dictionary<string, object> { { "uri", FilePathToUri(filePath) } } },
+                { "positions", posArray.ToArray() }
+            };
+            return SendRequest("textDocument/selectionRange", parms);
+        }
+
+        /// <summary>textDocument/codeAction. Attaches the cached diagnostics that overlap the range as
+        /// context (with their full server-supplied <c>data</c> intact) so data-driven Clarion quick-fixes
+        /// resolve — the caller supplies only the range.</summary>
+        public Dictionary<string, object> GetCodeActions(string filePath, int startLine, int startCharacter, int endLine, int endCharacter)
+        {
+            EnsureDocumentOpen(filePath);
+            var range = new Dictionary<string, object>
+            {
+                { "start", new Dictionary<string, object> { { "line", startLine }, { "character", startCharacter } } },
+                { "end", new Dictionary<string, object> { { "line", endLine }, { "character", endCharacter } } }
+            };
+            var context = new Dictionary<string, object>
+            {
+                { "diagnostics", DiagnosticsOverlapping(filePath, startLine, endLine).ToArray() }
+            };
+            var parms = new Dictionary<string, object>
+            {
+                { "textDocument", new Dictionary<string, object> { { "uri", FilePathToUri(filePath) } } },
+                { "range", range },
+                { "context", context }
+            };
+            return SendRequest("textDocument/codeAction", parms);
+        }
+
+        public Dictionary<string, object> GetCodeLenses(string filePath)
+        {
+            EnsureDocumentOpen(filePath);
+            var parms = new Dictionary<string, object>
+            {
+                { "textDocument", new Dictionary<string, object> { { "uri", FilePathToUri(filePath) } } }
+            };
+            return SendRequest("textDocument/codeLens", parms);
+        }
+
+        public Dictionary<string, object> ResolveCodeLens(Dictionary<string, object> rawLens)
+        {
+            return SendRequest("codeLens/resolve", rawLens);
+        }
+
+        public Dictionary<string, object> ExecuteCommand(string command, object[] arguments)
+        {
+            var parms = new Dictionary<string, object>
+            {
+                { "command", command },
+                { "arguments", arguments ?? new object[0] }
+            };
+            // Generous timeout: the server does the work and round-trips a workspace/applyEdit before responding.
+            return SendRequest("workspace/executeCommand", parms, 15000);
+        }
+
+        /// <summary>The cached raw diagnostics for a file whose range overlaps [startLine, endLine].
+        /// Returns the raw server dicts (data field intact) so they can be replayed as code-action context.</summary>
+        private List<Dictionary<string, object>> DiagnosticsOverlapping(string filePath, int startLine, int endLine)
+        {
+            var result = new List<Dictionary<string, object>>();
+            string key = CanonicalizeUri(FilePathToUri(filePath));
+            lock (_diagnosticsLock)
+            {
+                DiagnosticSet set;
+                if (!_diagnostics.TryGetValue(key, out set) || set.Raw == null) return result;
+                foreach (var d in set.Raw)
+                {
+                    if (d == null) continue;
+                    var range = d.ContainsKey("range") ? d["range"] as Dictionary<string, object> : null;
+                    var start = range != null && range.ContainsKey("start") ? range["start"] as Dictionary<string, object> : null;
+                    var end = range != null && range.ContainsKey("end") ? range["end"] as Dictionary<string, object> : null;
+                    int dStart = start != null && start.ContainsKey("line") ? Convert.ToInt32(start["line"]) : 0;
+                    int dEnd = end != null && end.ContainsKey("line") ? Convert.ToInt32(end["line"]) : dStart;
+                    if (dStart <= endLine && dEnd >= startLine) result.Add(d);
+                }
+            }
+            return result;
         }
 
         /// <summary>
@@ -434,6 +549,31 @@ namespace ClarionLsp
             WriteMessage(_serializer.Serialize(msg));
         }
 
+        private void SendResponse(object id, Dictionary<string, object> result)
+        {
+            if (!_running || _process == null || _process.HasExited) return;
+            var msg = new Dictionary<string, object> { { "jsonrpc", "2.0" }, { "id", id }, { "result", result } };
+            WriteMessage(_serializer.Serialize(msg));
+        }
+
+        /// <summary>Answer a server→client request. workspace/applyEdit is surfaced via
+        /// <see cref="ApplyEditReceived"/> then acknowledged; every other server request gets a null
+        /// result so the server never blocks waiting on us.</summary>
+        private void HandleServerRequest(string method, object id, Dictionary<string, object> parms)
+        {
+            try
+            {
+                if (method == "workspace/applyEdit")
+                {
+                    try { ApplyEditReceived?.Invoke(parms); } catch { }
+                    SendResponse(id, new Dictionary<string, object> { { "applied", true } });
+                    return;
+                }
+                SendResponse(id, null);
+            }
+            catch { }
+        }
+
         private void WriteMessage(string json)
         {
             lock (_writeLock)
@@ -462,7 +602,23 @@ namespace ClarionLsp
                     try
                     {
                         var msg = _serializer.Deserialize<Dictionary<string, object>>(json);
-                        if (msg.ContainsKey("id") && msg["id"] != null)
+                        bool hasMethod = msg.ContainsKey("method") && msg["method"] != null;
+                        bool hasId = msg.ContainsKey("id") && msg["id"] != null;
+
+                        // A message carrying a "method" is server-initiated (request if it also has an
+                        // id, else a notification). Only a method-less message with an id is a response
+                        // to one of our requests — checking method first avoids misfiling a server
+                        // request (e.g. workspace/applyEdit) as a response (and a possible id collision).
+                        if (hasMethod)
+                        {
+                            var method = msg["method"] as string;
+                            var mparams = msg.ContainsKey("params") ? msg["params"] as Dictionary<string, object> : null;
+                            if (hasId)
+                                HandleServerRequest(method, msg["id"], mparams);
+                            else if (method == "textDocument/publishDiagnostics")
+                                HandlePublishDiagnostics(mparams);
+                        }
+                        else if (hasId)
                         {
                             int id;
                             if (int.TryParse(msg["id"].ToString(), out id))
@@ -470,13 +626,6 @@ namespace ClarionLsp
                                 lock (_responses) { _responses[id] = json; }
                                 _responseReceived.Set();
                             }
-                        }
-                        else if (msg.ContainsKey("method"))
-                        {
-                            // Server-initiated notification (no id).
-                            var method = msg["method"] as string;
-                            if (method == "textDocument/publishDiagnostics")
-                                HandlePublishDiagnostics(msg.ContainsKey("params") ? msg["params"] as Dictionary<string, object> : null);
                         }
                     }
                     catch { }

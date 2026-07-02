@@ -15,6 +15,7 @@ namespace ClarionLsp
         public bool IsRunning => _client.IsRunning;
 
         public event Action<string, DiagnosticResult[]> DiagnosticsPublished;
+        public event Action<WorkspaceApplyEdit> ApplyEditRequested;
 
         public ClarionLspService()
         {
@@ -25,6 +26,15 @@ namespace ClarionLsp
                 if (handler == null) return;
                 try { handler(filePath, ParseDiagnostics(raw)); }
                 catch (Exception ex) { Log("DiagnosticsPublished handler error: " + ex.Message); }
+            };
+
+            // Bridge the client's raw workspace/applyEdit reverse-request into the public typed event.
+            _client.ApplyEditReceived += (rawParams) =>
+            {
+                var handler = ApplyEditRequested;
+                if (handler == null) return;
+                try { handler(ParseWorkspaceApplyEdit(rawParams)); }
+                catch (Exception ex) { Log("ApplyEditRequested handler error: " + ex.Message); }
             };
         }
 
@@ -169,6 +179,112 @@ namespace ClarionLsp
                 var result = ParseCompletion(raw);
                 Log("GetCompletion result: " + result.Length + " item(s)");
                 return result;
+            });
+        }
+
+        public Task<SignatureHelpResult> GetSignatureHelpAsync(string filePath, int line, int character, string bufferText = null, int timeoutMs = 3000)
+        {
+            return Task.Run(() =>
+            {
+                Log($"GetSignatureHelp {Path.GetFileName(filePath)} {line}:{character}" + (bufferText != null ? " (buffer)" : ""));
+                if (!string.IsNullOrEmpty(bufferText)) _client.SyncBuffer(filePath, bufferText);
+                var raw = _client.GetSignatureHelp(filePath, line, character, timeoutMs);
+                var result = ParseSignatureHelp(raw);
+                Log("GetSignatureHelp result: " + (result != null ? result.Signatures.Length + " signature(s)" : "null"));
+                return result;
+            });
+        }
+
+        public Task<DocumentHighlight[]> GetDocumentHighlightsAsync(string filePath, int line, int character)
+        {
+            return Task.Run(() =>
+            {
+                Log($"GetDocumentHighlights {Path.GetFileName(filePath)} {line}:{character}");
+                var raw = _client.GetDocumentHighlights(filePath, line, character);
+                var result = ParseDocumentHighlights(raw);
+                Log("GetDocumentHighlights result: " + result.Length + " highlight(s)");
+                return result;
+            });
+        }
+
+        public Task<TextEdit[]> FormatDocumentAsync(string filePath, int tabSize = 4, bool insertSpaces = false)
+        {
+            return Task.Run(() =>
+            {
+                Log($"FormatDocument {Path.GetFileName(filePath)} tabSize={tabSize} insertSpaces={insertSpaces}");
+                var raw = _client.FormatDocument(filePath, tabSize, insertSpaces);
+                var result = ParseTextEdits(raw);
+                Log("FormatDocument result: " + result.Length + " edit(s)");
+                return result;
+            });
+        }
+
+        public Task<SelectionRange[]> GetSelectionRangesAsync(string filePath, Position[] positions)
+        {
+            return Task.Run(() =>
+            {
+                Log($"GetSelectionRanges {Path.GetFileName(filePath)} ({positions?.Length ?? 0} position(s))");
+                var raws = new List<Dictionary<string, object>>();
+                if (positions != null) foreach (var p in positions) raws.Add(PositionToRaw(p));
+                var raw = _client.GetSelectionRanges(filePath, raws);
+                var result = ParseSelectionRanges(raw);
+                Log("GetSelectionRanges result: " + result.Length + " range(s)");
+                return result;
+            });
+        }
+
+        public Task<CodeActionResult[]> GetCodeActionsAsync(string filePath, Range range)
+        {
+            return Task.Run(() =>
+            {
+                if (range == null || range.Start == null || range.End == null)
+                    return new CodeActionResult[0];
+                Log($"GetCodeActions {Path.GetFileName(filePath)} {range.Start.Line}:{range.Start.Character}-{range.End.Line}:{range.End.Character}");
+                var raw = _client.GetCodeActions(filePath, range.Start.Line, range.Start.Character, range.End.Line, range.End.Character);
+                var result = ParseCodeActions(raw);
+                Log("GetCodeActions result: " + result.Length + " action(s)");
+                return result;
+            });
+        }
+
+        public Task<CodeLensResult[]> GetCodeLensesAsync(string filePath)
+        {
+            return Task.Run(() =>
+            {
+                Log("GetCodeLenses " + Path.GetFileName(filePath));
+                var raw = _client.GetCodeLenses(filePath);
+                var result = ParseCodeLenses(raw);
+                Log("GetCodeLenses result: " + result.Length + " lens(es)");
+                return result;
+            });
+        }
+
+        public Task<CodeLensResult> ResolveCodeLensAsync(CodeLensResult lens)
+        {
+            return Task.Run(() =>
+            {
+                if (lens == null) return null;
+                var rawLens = new Dictionary<string, object>();
+                if (lens.Range != null) rawLens["range"] = RangeToRaw(lens.Range);
+                if (lens.Data != null) rawLens["data"] = lens.Data;
+                if (lens.Command != null) rawLens["command"] = CommandToRaw(lens.Command);
+                var raw = _client.ResolveCodeLens(rawLens);
+                var resolved = (raw != null && raw.ContainsKey("result"))
+                    ? ParseCodeLens(raw["result"] as Dictionary<string, object>)
+                    : null;
+                return resolved ?? lens;
+            });
+        }
+
+        public Task<bool> ExecuteCommandAsync(string command, object[] arguments)
+        {
+            return Task.Run(() =>
+            {
+                Log("ExecuteCommand " + command);
+                var raw = _client.ExecuteCommand(command, arguments);
+                bool ok = raw != null && !raw.ContainsKey("error");
+                Log("ExecuteCommand result: " + (ok ? "ok" : "failed/timeout"));
+                return ok;
             });
         }
 
@@ -491,6 +607,359 @@ namespace ClarionLsp
                 Log("ParseCompletion error: " + ex.Message);
             }
             return list.ToArray();
+        }
+
+        private static SignatureHelpResult ParseSignatureHelp(Dictionary<string, object> raw)
+        {
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null) return null;
+                var result = raw["result"] as Dictionary<string, object>;
+                if (result == null) return null;
+
+                var signatures = new List<SignatureInfo>();
+                var sigList = result.ContainsKey("signatures") ? result["signatures"] as System.Collections.ArrayList : null;
+                if (sigList != null)
+                {
+                    foreach (var so in sigList)
+                    {
+                        var sd = so as Dictionary<string, object>;
+                        if (sd == null) continue;
+                        string label = sd.ContainsKey("label") ? sd["label"]?.ToString() : null;
+
+                        var parameters = new List<SignatureParameter>();
+                        var paramList = sd.ContainsKey("parameters") ? sd["parameters"] as System.Collections.ArrayList : null;
+                        if (paramList != null)
+                        {
+                            foreach (var po in paramList)
+                            {
+                                var pd = po as Dictionary<string, object>;
+                                if (pd == null) continue;
+                                parameters.Add(new SignatureParameter
+                                {
+                                    Label = ParseParamLabel(pd.ContainsKey("label") ? pd["label"] : null, label),
+                                    Documentation = MarkupToString(pd.ContainsKey("documentation") ? pd["documentation"] : null)
+                                });
+                            }
+                        }
+
+                        signatures.Add(new SignatureInfo
+                        {
+                            Label = label,
+                            Documentation = MarkupToString(sd.ContainsKey("documentation") ? sd["documentation"] : null),
+                            Parameters = parameters.ToArray()
+                        });
+                    }
+                }
+
+                if (signatures.Count == 0) return null;
+
+                return new SignatureHelpResult
+                {
+                    Signatures = signatures.ToArray(),
+                    ActiveSignature = result.ContainsKey("activeSignature") ? SafeInt(result["activeSignature"]) : 0,
+                    ActiveParameter = result.ContainsKey("activeParameter") ? SafeInt(result["activeParameter"]) : 0
+                };
+            }
+            catch (Exception ex)
+            {
+                Log("ParseSignatureHelp error: " + ex.Message);
+                return null;
+            }
+        }
+
+        // An LSP parameter label is either a plain string or a [start, end] offset pair into the
+        // owning signature's label — resolve the pair to the substring so consumers get real text.
+        private static string ParseParamLabel(object label, string signatureLabel)
+        {
+            if (label is string s) return s;
+            var arr = label as System.Collections.ArrayList;
+            if (arr != null && arr.Count == 2 && signatureLabel != null)
+            {
+                try
+                {
+                    int start = SafeInt(arr[0]);
+                    int end = SafeInt(arr[1]);
+                    if (start >= 0 && end <= signatureLabel.Length && end > start)
+                        return signatureLabel.Substring(start, end - start);
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static DocumentHighlight[] ParseDocumentHighlights(Dictionary<string, object> raw)
+        {
+            var list = new List<DocumentHighlight>();
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null) return list.ToArray();
+                var items = raw["result"] as System.Collections.ArrayList;
+                if (items == null) return list.ToArray();
+                foreach (var o in items)
+                {
+                    var d = o as Dictionary<string, object>;
+                    if (d == null) continue;
+                    list.Add(new DocumentHighlight
+                    {
+                        Range = ParseRange(d.ContainsKey("range") ? d["range"] as Dictionary<string, object> : null),
+                        Kind = HighlightKindName(d.ContainsKey("kind") ? d["kind"] : null)
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseDocumentHighlights error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static string HighlightKindName(object kind)
+        {
+            if (kind == null) return "Text";
+            switch (SafeInt(kind))
+            {
+                case 1: return "Text";
+                case 2: return "Read";
+                case 3: return "Write";
+                default: return "Text";
+            }
+        }
+
+        private static TextEdit[] ParseTextEdits(Dictionary<string, object> raw)
+        {
+            var list = new List<TextEdit>();
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null) return list.ToArray();
+                var items = raw["result"] as System.Collections.ArrayList;
+                if (items == null) return list.ToArray();
+                foreach (var o in items)
+                {
+                    var te = o as Dictionary<string, object>;
+                    if (te != null) list.Add(ParseTextEdit(te));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseTextEdits error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static TextEdit ParseTextEdit(Dictionary<string, object> te)
+        {
+            return new TextEdit
+            {
+                Range = ParseRange(te.ContainsKey("range") ? te["range"] as Dictionary<string, object> : null),
+                NewText = te.ContainsKey("newText") ? te["newText"]?.ToString() : null
+            };
+        }
+
+        private static SelectionRange[] ParseSelectionRanges(Dictionary<string, object> raw)
+        {
+            var list = new List<SelectionRange>();
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null) return list.ToArray();
+                var items = raw["result"] as System.Collections.ArrayList;
+                if (items == null) return list.ToArray();
+                foreach (var o in items) list.Add(ParseSelectionRange(o as Dictionary<string, object>));
+            }
+            catch (Exception ex)
+            {
+                Log("ParseSelectionRanges error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static SelectionRange ParseSelectionRange(Dictionary<string, object> d)
+        {
+            if (d == null) return null;
+            return new SelectionRange
+            {
+                Range = ParseRange(d.ContainsKey("range") ? d["range"] as Dictionary<string, object> : null),
+                Parent = d.ContainsKey("parent") ? ParseSelectionRange(d["parent"] as Dictionary<string, object>) : null
+            };
+        }
+
+        private static CodeActionResult[] ParseCodeActions(Dictionary<string, object> raw)
+        {
+            var list = new List<CodeActionResult>();
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null) return list.ToArray();
+                var items = raw["result"] as System.Collections.ArrayList;
+                if (items == null) return list.ToArray();
+                foreach (var o in items)
+                {
+                    var d = o as Dictionary<string, object>;
+                    if (d == null) continue;
+
+                    var action = new CodeActionResult
+                    {
+                        Title = d.ContainsKey("title") ? d["title"]?.ToString() : null,
+                        Kind = d.ContainsKey("kind") ? d["kind"]?.ToString() : null,
+                        IsPreferred = d.ContainsKey("isPreferred") && d["isPreferred"] is bool && (bool)d["isPreferred"]
+                    };
+
+                    // A bare Command has command:string; a CodeAction nests a Command object (or none).
+                    if (d.ContainsKey("command"))
+                    {
+                        if (d["command"] is string) action.Command = ParseCommand(d);
+                        else action.Command = ParseCommand(d["command"] as Dictionary<string, object>);
+                    }
+                    if (d.ContainsKey("edit"))
+                        action.Edit = ParseWorkspaceEditChanges(d["edit"] as Dictionary<string, object>);
+
+                    list.Add(action);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseCodeActions error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static CommandInfo ParseCommand(Dictionary<string, object> d)
+        {
+            if (d == null) return null;
+            var args = new List<object>();
+            var argList = d.ContainsKey("arguments") ? d["arguments"] as System.Collections.ArrayList : null;
+            if (argList != null) foreach (var a in argList) args.Add(a);
+            return new CommandInfo
+            {
+                Title = d.ContainsKey("title") ? d["title"]?.ToString() : null,
+                Command = d.ContainsKey("command") ? d["command"]?.ToString() : null,
+                Arguments = args.ToArray()
+            };
+        }
+
+        private static WorkspaceEditChange[] ParseWorkspaceEditChanges(Dictionary<string, object> edit)
+        {
+            var list = new List<WorkspaceEditChange>();
+            if (edit == null) return list.ToArray();
+            try
+            {
+                // WorkspaceEdit.changes: { uri: TextEdit[] }
+                if (edit.ContainsKey("changes") && edit["changes"] is Dictionary<string, object> changes)
+                {
+                    foreach (var kvp in changes)
+                    {
+                        var edits = new List<TextEdit>();
+                        var arr = kvp.Value as System.Collections.ArrayList;
+                        if (arr != null)
+                            foreach (var e in arr) { var te = e as Dictionary<string, object>; if (te != null) edits.Add(ParseTextEdit(te)); }
+                        list.Add(new WorkspaceEditChange { FilePath = LspClient.UriToFilePath(kvp.Key), Edits = edits.ToArray() });
+                    }
+                }
+                // WorkspaceEdit.documentChanges: [ TextDocumentEdit { textDocument:{uri}, edits:[...] } ]
+                else if (edit.ContainsKey("documentChanges") && edit["documentChanges"] is System.Collections.ArrayList docChanges)
+                {
+                    foreach (var dc in docChanges)
+                    {
+                        var dcd = dc as Dictionary<string, object>;
+                        if (dcd == null) continue;
+                        var td = dcd.ContainsKey("textDocument") ? dcd["textDocument"] as Dictionary<string, object> : null;
+                        string uri = td != null && td.ContainsKey("uri") ? td["uri"]?.ToString() : null;
+                        if (uri == null) continue;
+                        var edits = new List<TextEdit>();
+                        var arr = dcd.ContainsKey("edits") ? dcd["edits"] as System.Collections.ArrayList : null;
+                        if (arr != null)
+                            foreach (var e in arr) { var te = e as Dictionary<string, object>; if (te != null) edits.Add(ParseTextEdit(te)); }
+                        list.Add(new WorkspaceEditChange { FilePath = LspClient.UriToFilePath(uri), Edits = edits.ToArray() });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseWorkspaceEditChanges error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static CodeLensResult[] ParseCodeLenses(Dictionary<string, object> raw)
+        {
+            var list = new List<CodeLensResult>();
+            try
+            {
+                if (raw == null || !raw.ContainsKey("result") || raw["result"] == null) return list.ToArray();
+                var items = raw["result"] as System.Collections.ArrayList;
+                if (items == null) return list.ToArray();
+                foreach (var o in items)
+                {
+                    var d = o as Dictionary<string, object>;
+                    if (d != null) list.Add(ParseCodeLens(d));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ParseCodeLenses error: " + ex.Message);
+            }
+            return list.ToArray();
+        }
+
+        private static CodeLensResult ParseCodeLens(Dictionary<string, object> d)
+        {
+            if (d == null) return null;
+            return new CodeLensResult
+            {
+                Range = ParseRange(d.ContainsKey("range") ? d["range"] as Dictionary<string, object> : null),
+                Command = d.ContainsKey("command") ? ParseCommand(d["command"] as Dictionary<string, object>) : null,
+                Data = d.ContainsKey("data") ? d["data"] : null
+            };
+        }
+
+        private static WorkspaceApplyEdit ParseWorkspaceApplyEdit(Dictionary<string, object> parms)
+        {
+            if (parms == null) return null;
+            var edit = parms.ContainsKey("edit") ? parms["edit"] as Dictionary<string, object> : null;
+            return new WorkspaceApplyEdit
+            {
+                Label = parms.ContainsKey("label") ? parms["label"]?.ToString() : null,
+                Changes = ParseWorkspaceEditChanges(edit)
+            };
+        }
+
+        private static string MarkupToString(object doc)
+        {
+            if (doc == null) return null;
+            if (doc is string s) return s;
+            var d = doc as Dictionary<string, object>;
+            if (d != null && d.ContainsKey("value")) return d["value"]?.ToString();
+            return null;
+        }
+
+        private static int SafeInt(object v)
+        {
+            try { return Convert.ToInt32(v); } catch { return 0; }
+        }
+
+        private static Dictionary<string, object> RangeToRaw(Range r)
+        {
+            if (r == null) return null;
+            return new Dictionary<string, object>
+            {
+                { "start", PositionToRaw(r.Start) },
+                { "end", PositionToRaw(r.End) }
+            };
+        }
+
+        private static Dictionary<string, object> PositionToRaw(Position p)
+        {
+            return new Dictionary<string, object> { { "line", p?.Line ?? 0 }, { "character", p?.Character ?? 0 } };
+        }
+
+        private static Dictionary<string, object> CommandToRaw(CommandInfo c)
+        {
+            if (c == null) return null;
+            return new Dictionary<string, object>
+            {
+                { "title", c.Title },
+                { "command", c.Command },
+                { "arguments", c.Arguments ?? new object[0] }
+            };
         }
 
         private static DiagnosticResult[] ParseDiagnostics(List<Dictionary<string, object>> raw)

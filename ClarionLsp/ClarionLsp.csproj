@@ -7,7 +7,7 @@
     <RootNamespace>ClarionLsp</RootNamespace>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
-    <Version>1.1.0</Version>
+    <Version>1.4.0</Version>
     <Product>ClarionLsp</Product>
     <Description>Shared Clarion LSP addin — manages the language server lifecycle and exposes IClarionLanguageClient</Description>
     <Company>msarson</Company>

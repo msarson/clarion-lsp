@@ -2,6 +2,25 @@
 
 All notable changes to ClarionLsp will be documented in this file.
 
+## [1.4.0] - 2026-07-02
+
+### Added
+- `IClarionLanguageClient.GetSignatureHelpAsync` — parameter hints for a call site (`textDocument/signatureHelp`), buffer-aware; `SignatureHelpResult`/`SignatureInfo`/`SignatureParameter` DTOs (LSP parameter-label offset pairs are resolved to their substring)
+- `IClarionLanguageClient.GetDocumentHighlightsAsync` — occurrences of the symbol under the cursor within a file (`textDocument/documentHighlight`); `DocumentHighlight` DTO
+- `IClarionLanguageClient.FormatDocumentAsync` — whole-document formatting edits (`textDocument/formatting`); `TextEdit` DTO
+- `IClarionLanguageClient.GetSelectionRangesAsync` — smart expand/shrink selection ranges (`textDocument/selectionRange`); `SelectionRange` DTO
+- `IClarionLanguageClient.GetCodeActionsAsync` — quick-fixes/refactors for a range (`textDocument/codeAction`); the diagnostics overlapping the range are attached as context automatically (with their server `data` intact) so data-driven Clarion actions resolve; `CodeActionResult`/`CommandInfo`/`WorkspaceEditChange` DTOs
+- `IClarionLanguageClient.GetCodeLensesAsync` + `ResolveCodeLensAsync` — code lenses with lazy command resolution (`textDocument/codeLens`, `codeLens/resolve`); `CodeLensResult` DTO
+- `IClarionLanguageClient.ExecuteCommandAsync` — run a server command (`workspace/executeCommand`), e.g. a code action's command
+- `IClarionLanguageClient.ApplyEditRequested` event — the server's `workspace/applyEdit` reverse-request (typically the effect of a command); the addin auto-acknowledges the server and a subscriber applies the edits; `WorkspaceApplyEdit` DTO
+- `LspClient` now distinguishes server→client **requests** from responses (checks `method` before `id`), answering `workspace/applyEdit` and defaulting other server requests to a null result so the server never blocks
+
+## [1.3.0] - 2026-07-02
+
+### Added
+- `IClarionLanguageClient.GetFoldingRangesAsync` — collapsible regions for a file (`textDocument/foldingRange`); `FoldingRange` DTO
+- `IClarionLanguageClient.GetImplementationAsync` — implementation location(s) for a symbol (`textDocument/implementation`), resolving a method's `.inc` declaration to its `.clw` body
+
 ## [1.1.0] - 2026-06-12
 
 ### Added

@@ -11,6 +11,9 @@ Directory.Build.props.user
 packages/
 *.nupkg
 
+# Release artifacts (produced by the CreateRelease target)
+*.zip
+
 # OS
 Thumbs.db
 .DS_Store
