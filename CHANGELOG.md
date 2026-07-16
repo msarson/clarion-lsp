@@ -2,6 +2,14 @@
 
 All notable changes to ClarionLsp will be documented in this file.
 
+## [1.4.1] - 2026-07-16
+
+### Fixed
+- `GetDocumentSymbolsAsync` now preserves the full document-symbol hierarchy. `ParseDocumentSymbols` recursed only the top-level result and dropped `children`, collapsing a hierarchical outline (procedures with nested `WINDOW`/controls, classes with methods, routines with data) to just the root callables. It now recurses `children` and captures `detail` (control `USE(...)`, method signatures), reading the range from either `DocumentSymbol.range` or `SymbolInformation.location.range`.
+
+### Added
+- `SymbolResult.Children` (nested symbols) and `SymbolResult.Detail`. These are written via reflection so that if an older `ClarionLsp.Contracts` (same `AssemblyVersion 1.0.0.0`) wins the shared first-load race, `GetDocumentSymbolsAsync` degrades to a flat result rather than faulting on a missing member.
+
 ## [1.4.0] - 2026-07-02
 
 ### Added

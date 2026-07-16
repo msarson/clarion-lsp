@@ -459,16 +459,7 @@ namespace ClarionLsp
                 foreach (var item in items)
                 {
                     if (item is Dictionary<string, object> sym)
-                    {
-                        list.Add(new SymbolResult
-                        {
-                            Name = sym.ContainsKey("name") ? sym["name"]?.ToString() : null,
-                            Kind = SymbolKindName(sym.ContainsKey("kind") ? sym["kind"] : null),
-                            FilePath = filePath,
-                            Range = ParseRange(sym.ContainsKey("range") ? sym["range"] as Dictionary<string, object> : null),
-                            ContainerName = sym.ContainsKey("containerName") ? sym["containerName"]?.ToString() : null
-                        });
-                    }
+                        list.Add(ParseSymbolNode(sym, filePath));
                 }
             }
             catch (Exception ex)
@@ -476,6 +467,53 @@ namespace ClarionLsp
                 Log("ParseDocumentSymbols error: " + ex.Message);
             }
             return list.ToArray();
+        }
+
+        // Recursively parse a documentSymbol node. Hierarchical DocumentSymbol carries `detail` and a nested
+        // `children` array (windows/controls, class members, routine data, …); flat SymbolInformation simply has
+        // no children. Preserving the tree is what lets consumers render a full structure outline rather than a
+        // flat list of the root callables.
+        private static SymbolResult ParseSymbolNode(Dictionary<string, object> sym, string filePath)
+        {
+            var result = new SymbolResult
+            {
+                Name = sym.ContainsKey("name") ? sym["name"]?.ToString() : null,
+                Kind = SymbolKindName(sym.ContainsKey("kind") ? sym["kind"] : null),
+                FilePath = filePath,
+                Range = ParseRange(GetRangeDict(sym)),
+                ContainerName = sym.ContainsKey("containerName") ? sym["containerName"]?.ToString() : null
+            };
+            // Detail + Children are newer SymbolResult members. Set them via REFLECTION so this method still
+            // runs if an OLDER ClarionLsp.Contracts.dll wins the shared first-load race (both are
+            // AssemblyVersion 1.0.0.0, e.g. an older consumer's vendored copy) — it degrades to a flat result
+            // instead of faulting on a missing member. Symmetric with the consumer-side reflection read.
+            string detail = sym.ContainsKey("detail") ? sym["detail"]?.ToString() : null;
+            if (!string.IsNullOrEmpty(detail)) TrySetMember(result, "Detail", detail);
+
+            if (sym.ContainsKey("children") && sym["children"] is System.Collections.ArrayList kids)
+            {
+                var childList = new List<SymbolResult>();
+                foreach (var k in kids)
+                    if (k is Dictionary<string, object> kd) childList.Add(ParseSymbolNode(kd, filePath));
+                if (childList.Count > 0) TrySetMember(result, "Children", childList);
+            }
+            return result;
+        }
+
+        // Best-effort property set — no-op if the loaded contract lacks the member (an older first-load winner).
+        private static void TrySetMember(object target, string prop, object value)
+        {
+            try { var p = target.GetType().GetProperty(prop); if (p != null && p.CanWrite) p.SetValue(target, value, null); }
+            catch { }
+        }
+
+        // DocumentSymbol.range, or SymbolInformation.location.range.
+        private static Dictionary<string, object> GetRangeDict(Dictionary<string, object> sym)
+        {
+            if (sym.ContainsKey("range")) return sym["range"] as Dictionary<string, object>;
+            if (sym.ContainsKey("location") && sym["location"] is Dictionary<string, object> loc && loc.ContainsKey("range"))
+                return loc["range"] as Dictionary<string, object>;
+            return null;
         }
 
         private static FoldingRange[] ParseFoldingRanges(Dictionary<string, object> raw)
