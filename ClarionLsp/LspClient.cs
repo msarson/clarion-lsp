@@ -43,6 +43,14 @@ namespace ClarionLsp
 
         public bool IsRunning => _running && _process != null && !_process.HasExited;
 
+        /// <summary>
+        /// How long the diagnostic stream must stay quiet before <see cref="GetDiagnostics"/>
+        /// treats an analysis as finished — it covers the gap between the server's sync and async
+        /// publishes for a file. Bounded by each call's own timeout, so raising it cannot make a
+        /// call outlast its budget; 0 restores the old return-on-first-publish behaviour.
+        /// </summary>
+        public int DiagnosticsSettleMs { get; set; } = 400;
+
         public void SetUpdatePaths(Dictionary<string, object> updatePaths)
         {
             _pendingUpdatePaths = updatePaths;
@@ -355,12 +363,28 @@ namespace ClarionLsp
         /// analyze live unsaved content; otherwise the on-disk file is (re)analyzed. On timeout the
         /// last-known diagnostics for the file are returned (empty if none have ever arrived).
         /// </summary>
+        /// <remarks>
+        /// The Clarion server analyses in two phases and publishes TWICE per analysis: the sync
+        /// validators first, then the async ones (undeclared-variable, missing-include,
+        /// discarded-return, missing-implementation). Returning on the first publish therefore
+        /// reported a still-analysing file as finished — and routinely as CLEAN, since the first
+        /// pass carries none of the async findings (#5).
+        ///
+        /// So this waits for the stream to go QUIET rather than for a publish count: the first
+        /// publish is awaited within the full budget, then every further publish restarts a
+        /// <see cref="DiagnosticsSettleMs"/> quiet period, until the stream settles or the budget
+        /// runs out. Deliberately NOT keyed on clarion/symbolsRefreshed — the server sends that
+        /// right after it kicks validation off rather than when validation finishes, and for a file
+        /// under libsrcPaths the async pass never runs at all, so there is no second publish to
+        /// wait for and this returns once the quiet period expires.
+        /// </remarks>
         public List<Dictionary<string, object>> GetDiagnostics(string filePath, string bufferText = null, int timeoutMs = 3000)
         {
             if (!IsRunning || string.IsNullOrEmpty(filePath)) return new List<Dictionary<string, object>>();
 
             string key = CanonicalizeUri(FilePathToUri(filePath));
             DiagnosticSet set;
+            long seen;
             lock (_diagnosticsLock)
             {
                 if (!_diagnostics.TryGetValue(key, out set))
@@ -369,8 +393,9 @@ namespace ClarionLsp
                     _diagnostics[key] = set;
                     EvictOldestIfFull_NoLock();
                 }
-                // Arm the wait BEFORE triggering, so a publish can't slip in between.
-                set.Ready.Reset();
+                // Snapshot the publish counter BEFORE triggering, so a publish landing between
+                // the trigger and the wait is counted rather than missed.
+                seen = set.Sequence;
             }
 
             bool triggered;
@@ -381,7 +406,31 @@ namespace ClarionLsp
             // Only wait for a fresh publish if we actually changed something on the server.
             // If nothing changed, no new diagnostics are coming — return the last-known set now
             // instead of blocking for the full timeout on every unchanged-buffer poll.
-            if (triggered) set.Ready.Wait(timeoutMs);
+            if (triggered)
+            {
+                var budget = System.Diagnostics.Stopwatch.StartNew();
+                int settleMs = Math.Max(0, DiagnosticsSettleMs);
+                lock (_diagnosticsLock)
+                {
+                    // Phase 1 — the first publish, worth the whole budget.
+                    while (set.Sequence == seen)
+                    {
+                        int remaining = timeoutMs - (int)budget.ElapsedMilliseconds;
+                        if (remaining <= 0) break;
+                        Monitor.Wait(_diagnosticsLock, remaining);
+                    }
+
+                    // Phase 2 — keep taking publishes until the stream stays quiet for settleMs
+                    // (the async pass has landed, or was never coming) or the budget runs out.
+                    while (set.Sequence != seen)
+                    {
+                        seen = set.Sequence;
+                        int remaining = timeoutMs - (int)budget.ElapsedMilliseconds;
+                        if (remaining <= 0) break;
+                        Monitor.Wait(_diagnosticsLock, Math.Min(settleMs, remaining));
+                    }
+                }
+            }
 
             lock (_diagnosticsLock)
                 return set.Raw != null
@@ -715,7 +764,10 @@ namespace ClarionLsp
                 }
                 set.Raw = raw;
                 set.LastUpdateTicks = DateTime.UtcNow.Ticks;
-                set.Ready.Set();
+                set.Sequence++;
+                // Wake any GetDiagnostics waiter: one publish per analysis phase, so it restarts
+                // its quiet period here rather than taking this as the final word.
+                Monitor.PulseAll(_diagnosticsLock);
             }
 
             try { DiagnosticsReceived?.Invoke(filePath, raw); } catch { }
@@ -738,7 +790,10 @@ namespace ClarionLsp
         {
             public List<Dictionary<string, object>> Raw;
             public long LastUpdateTicks;
-            public readonly ManualResetEventSlim Ready = new ManualResetEventSlim(false);
+            /// <summary>Publishes seen for this file. Waiters watch this change under
+            /// _diagnosticsLock instead of waiting on a one-shot gate, which could only ever
+            /// report the FIRST publish of a two-phase analysis.</summary>
+            public long Sequence;
         }
 
         public void Dispose() => Stop();

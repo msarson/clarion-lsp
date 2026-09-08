@@ -89,9 +89,17 @@ namespace ClarionLsp.Contracts
 
         /// <summary>
         /// Latest diagnostics for the file. Triggers a fresh server analysis and waits up to
-        /// <paramref name="timeoutMs"/> for the resulting publish. Pass <paramref name="bufferText"/>
-        /// to analyze live unsaved content. An empty array means the server reported a clean file.
+        /// <paramref name="timeoutMs"/> for it to finish. Pass <paramref name="bufferText"/>
+        /// to analyze live unsaved content.
         /// </summary>
+        /// <remarks>
+        /// The server analyses in two phases and publishes once per phase; this waits for that
+        /// stream to settle, so the result is the finished analysis rather than the first pass.
+        /// An empty array therefore means a clean file ONLY when the call returned inside its
+        /// budget — on timeout the best set known so far is returned, which early in an analysis
+        /// can be empty. Subscribe to <see cref="DiagnosticsPublished"/> instead to see each
+        /// phase as it lands rather than one settled answer.
+        /// </remarks>
         Task<DiagnosticResult[]> GetDiagnosticsAsync(string filePath, string bufferText = null, int timeoutMs = 3000);
 
         /// <summary>

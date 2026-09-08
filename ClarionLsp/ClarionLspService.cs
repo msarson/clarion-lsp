@@ -14,6 +14,18 @@ namespace ClarionLsp
 
         public bool IsRunning => _client.IsRunning;
 
+        /// <summary>
+        /// Quiet period the diagnostic stream must go without a new publish before
+        /// <see cref="GetDiagnosticsAsync"/> treats an analysis as finished (default 400ms).
+        /// Not on <see cref="IClarionLanguageClient"/> — it is a tuning knob for hosts that know
+        /// their server's timing, not part of the contract.
+        /// </summary>
+        public int DiagnosticsSettleMs
+        {
+            get { return _client.DiagnosticsSettleMs; }
+            set { _client.DiagnosticsSettleMs = value; }
+        }
+
         public event Action<string, DiagnosticResult[]> DiagnosticsPublished;
         public event Action<WorkspaceApplyEdit> ApplyEditRequested;
 

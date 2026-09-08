@@ -2,6 +2,17 @@
 
 All notable changes to ClarionLsp will be documented in this file.
 
+## [1.4.2] - 2026-09-08
+
+### Fixed
+- `GetDiagnosticsAsync` / `GetDiagnostics` returned the **first** `textDocument/publishDiagnostics` for a file instead of the finished analysis ([#5](https://github.com/msarson/clarion-lsp/issues/5)). The Clarion server analyses in two phases and publishes once per phase — the sync validators first, then the async ones (undeclared-variable, missing-include, discarded-return, missing-implementation) — so the value returned was routinely the incomplete first pass, reported as complete. A caller asking "is this file clean?" was told yes while the real answer was still in flight. Surfaced by @peterparker57, whose tooling read `count: 0` on the first query of every file. The wait now watches a per-file publish counter and returns once the stream has stayed quiet for `DiagnosticsSettleMs` (default 400ms), still bounded by the call's own `timeoutMs`, so a timeout returns the best set known so far exactly as before. Deliberately **not** keyed on `clarion/symbolsRefreshed`: the server sends that immediately after kicking validation off rather than when it finishes, and a file under `libsrcPaths` gets one publish only — so waiting for a second would hang there and fire early everywhere else.
+
+### Added
+- `ClarionLspService.DiagnosticsSettleMs` — the quiet period above, tunable by hosts that know their server's timing. Deliberately not on `IClarionLanguageClient`, so the contract is unchanged; set it to 0 to restore the previous return-on-first-publish behaviour.
+
+### Changed
+- `IClarionLanguageClient.GetDiagnosticsAsync` documentation now states the two-phase reality: an empty array means a clean file only when the call returned inside its budget, and `DiagnosticsPublished` remains the push-model alternative for callers that want each phase as it lands.
+
 ## [1.4.1] - 2026-07-16
 
 ### Fixed
