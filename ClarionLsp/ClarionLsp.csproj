@@ -49,10 +49,22 @@
     <PropertyGroup>
       <ContractsDll>$(MSBuildProjectDirectory)\..\ClarionLsp.Contracts\bin\$(Configuration)\$(TargetFramework)\ClarionLsp.Contracts.dll</ContractsDll>
       <ZipPath>$(MSBuildProjectDirectory)\..\ClarionLsp-v$(Version).zip</ZipPath>
+      <ZipStage>$(MSBuildProjectDirectory)\..\obj\release-stage</ZipStage>
     </PropertyGroup>
 
-    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(OutputPath)ClarionLsp.dll','$(ContractsDll)','$(MSBuildProjectDirectory)\ClarionLsp.addin' -DestinationPath '$(ZipPath)' -Force&quot;"
-          WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <!--
+      Stage the payload and zip it with MSBuild's own ZipDirectory. This used to shell out to
+      `powershell -Command Compress-Archive`, which fails on a machine whose Windows PowerShell
+      cannot autoload Microsoft.PowerShell.Archive — the release then dies after a successful
+      build and before the git/gh steps, leaving nothing published and no clue why.
+    -->
+    <RemoveDir Directories="$(ZipStage)" />
+    <MakeDir Directories="$(ZipStage)" />
+    <Copy SourceFiles="$(OutputPath)ClarionLsp.dll;$(ContractsDll);$(MSBuildProjectDirectory)\ClarionLsp.addin"
+          DestinationFolder="$(ZipStage)" />
+    <Delete Files="$(ZipPath)" />
+    <ZipDirectory SourceDirectory="$(ZipStage)" DestinationFile="$(ZipPath)" Overwrite="true" />
+    <RemoveDir Directories="$(ZipStage)" />
 
     <Exec Command="git diff --quiet || git commit -am &quot;chore: release v$(Version) [skip ci]&quot;"
           WorkingDirectory="$(MSBuildProjectDirectory)\.." IgnoreExitCode="true" />
