@@ -370,13 +370,15 @@ namespace ClarionLsp
         /// reported a still-analysing file as finished — and routinely as CLEAN, since the first
         /// pass carries none of the async findings (#5).
         ///
-        /// So this waits for the stream to go QUIET rather than for a publish count: the first
-        /// publish is awaited within the full budget, then every further publish restarts a
-        /// <see cref="DiagnosticsSettleMs"/> quiet period, until the stream settles or the budget
-        /// runs out. Deliberately NOT keyed on clarion/symbolsRefreshed — the server sends that
-        /// right after it kicks validation off rather than when validation finishes, and for a file
-        /// under libsrcPaths the async pass never runs at all, so there is no second publish to
-        /// wait for and this returns once the quiet period expires.
+        /// A server that supports it (clarion-extension #460) publishes clarion/diagnosticsStatus
+        /// after the diagnostics — this waits for "complete" for the version it synced, which is
+        /// authoritative: no quiet-period guessing, and "deferred" (the async pass has not run
+        /// during solution load) keeps waiting rather than concluding "clean" early. When the
+        /// connected server never sends that signal (an older build), it falls back to the previous
+        /// behaviour: await the first publish within the budget, then treat the stream going quiet
+        /// for <see cref="DiagnosticsSettleMs"/> as settled. Deliberately NOT keyed on
+        /// clarion/symbolsRefreshed — the server sends that when it starts validating, not when it
+        /// finishes.
         /// </remarks>
         public List<Dictionary<string, object>> GetDiagnostics(string filePath, string bufferText = null, int timeoutMs = 3000)
         {
@@ -384,7 +386,6 @@ namespace ClarionLsp
 
             string key = CanonicalizeUri(FilePathToUri(filePath));
             DiagnosticSet set;
-            long seen;
             lock (_diagnosticsLock)
             {
                 if (!_diagnostics.TryGetValue(key, out set))
@@ -393,9 +394,6 @@ namespace ClarionLsp
                     _diagnostics[key] = set;
                     EvictOldestIfFull_NoLock();
                 }
-                // Snapshot the publish counter BEFORE triggering, so a publish landing between
-                // the trigger and the wait is counted rather than missed.
-                seen = set.Sequence;
             }
 
             bool triggered;
@@ -403,32 +401,41 @@ namespace ClarionLsp
             else if (IsDocumentOpen(filePath)) triggered = SyncFromDisk(filePath);
             else triggered = EnsureDocumentOpen(filePath);
 
-            // Only wait for a fresh publish if we actually changed something on the server.
-            // If nothing changed, no new diagnostics are coming — return the last-known set now
-            // instead of blocking for the full timeout on every unchanged-buffer poll.
-            if (triggered)
-            {
-                var budget = System.Diagnostics.Stopwatch.StartNew();
-                int settleMs = Math.Max(0, DiagnosticsSettleMs);
-                lock (_diagnosticsLock)
-                {
-                    // Phase 1 — the first publish, worth the whole budget.
-                    while (set.Sequence == seen)
-                    {
-                        int remaining = timeoutMs - (int)budget.ElapsedMilliseconds;
-                        if (remaining <= 0) break;
-                        Monitor.Wait(_diagnosticsLock, remaining);
-                    }
+            // The document version now on the server for this file — what a "complete" status
+            // must refer to (>=, so a newer sync that superseded ours still satisfies the wait).
+            int sentVersion;
+            lock (_docSyncLock) _openDocuments.TryGetValue(filePath, out sentVersion);
 
-                    // Phase 2 — keep taking publishes until the stream stays quiet for settleMs
-                    // (the async pass has landed, or was never coming) or the budget runs out.
-                    while (set.Sequence != seen)
-                    {
-                        seen = set.Sequence;
-                        int remaining = timeoutMs - (int)budget.ElapsedMilliseconds;
-                        if (remaining <= 0) break;
-                        Monitor.Wait(_diagnosticsLock, Math.Min(settleMs, remaining));
-                    }
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+            int settleMs = Math.Max(0, DiagnosticsSettleMs);
+            lock (_diagnosticsLock)
+            {
+                while (true)
+                {
+                    // Authoritative: the server signalled completion for our version (or newer).
+                    // #460 — "deferred"/"superseded" are not completion, so they fall through and
+                    // keep waiting; the drain pass (or the newer version's analysis) sends complete.
+                    if (set.State == "complete" && set.StatusVersion >= sentVersion) break;
+
+                    // Nothing was synced AND the server never sent a status for this file: no new
+                    // diagnostics are coming and there is no signal to wait for — return now, as the
+                    // pre-#460 unchanged-buffer fast path did.
+                    if (!triggered && set.State == null) break;
+
+                    int remaining = timeoutMs - (int)budget.ElapsedMilliseconds;
+                    if (remaining <= 0) break;
+
+                    long seqBefore = set.Sequence;
+                    string stateBefore = set.State;
+                    int verBefore = set.StatusVersion;
+                    Monitor.Wait(_diagnosticsLock, Math.Min(settleMs, remaining));
+                    bool changed = set.Sequence != seqBefore || set.State != stateBefore || set.StatusVersion != verBefore;
+
+                    // Quiet for settleMs with no new publish or status. On a server that sends the
+                    // #460 signal, a pending "deferred"/"superseded" means the answer is still
+                    // coming, so keep waiting (bounded by the budget). On an older server (no status
+                    // ever), the quiet stream is the settled-analysis heuristic — return.
+                    if (!changed && set.State == null) break;
                 }
             }
 
@@ -666,6 +673,8 @@ namespace ClarionLsp
                                 HandleServerRequest(method, msg["id"], mparams);
                             else if (method == "textDocument/publishDiagnostics")
                                 HandlePublishDiagnostics(mparams);
+                            else if (method == "clarion/diagnosticsStatus")
+                                HandleDiagnosticsStatus(mparams);
                         }
                         else if (hasId)
                         {
@@ -774,6 +783,40 @@ namespace ClarionLsp
             Log("publishDiagnostics: " + raw.Count + " entry(ies) for " + Path.GetFileName(filePath));
         }
 
+        /// <summary>
+        /// clarion/diagnosticsStatus (clarion-extension #460) — the server's own signal that it
+        /// has finished (or will not finish) analysing a document version. It arrives after the
+        /// matching publishDiagnostics, so GetDiagnostics can wait for the FACT of completion
+        /// rather than guessing from a quiet period: "complete" is the whole answer, "deferred"
+        /// means the async pass has not run yet (a drain pass will re-validate and send a further
+        /// status), and "superseded" means the document changed mid-analysis so this version will
+        /// never complete. Records the state + version and wakes any waiter.
+        /// </summary>
+        private void HandleDiagnosticsStatus(Dictionary<string, object> parms)
+        {
+            if (parms == null) return;
+            string uri = parms.ContainsKey("uri") ? parms["uri"] as string : null;
+            if (string.IsNullOrEmpty(uri)) return;
+            string state = parms.ContainsKey("state") ? parms["state"] as string : null;
+            int version = parms.ContainsKey("version") && parms["version"] != null ? Convert.ToInt32(parms["version"]) : 0;
+
+            string canonical = CanonicalizeUri(uri);
+            lock (_diagnosticsLock)
+            {
+                DiagnosticSet set;
+                if (!_diagnostics.TryGetValue(canonical, out set))
+                {
+                    set = new DiagnosticSet();
+                    _diagnostics[canonical] = set;
+                    EvictOldestIfFull_NoLock();
+                }
+                set.State = state;
+                set.StatusVersion = version;
+                Monitor.PulseAll(_diagnosticsLock);
+            }
+            Log("diagnosticsStatus: " + state + " v" + version + " for " + Path.GetFileName(UriToFilePath(uri)));
+        }
+
         private void EvictOldestIfFull_NoLock()
         {
             if (_diagnostics.Count <= MaxCachedDiagnosticFiles) return;
@@ -794,6 +837,13 @@ namespace ClarionLsp
             /// _diagnosticsLock instead of waiting on a one-shot gate, which could only ever
             /// report the FIRST publish of a two-phase analysis.</summary>
             public long Sequence;
+            /// <summary>Last clarion/diagnosticsStatus state for this file ("complete",
+            /// "deferred", "superseded"), or null when the server has never sent one (an older
+            /// server, or before the first status arrives). Lets the wait key on the server's
+            /// own completion fact instead of a quiet-period heuristic (clarion-extension #460).</summary>
+            public string State;
+            /// <summary>The document version the last <see cref="State"/> refers to.</summary>
+            public int StatusVersion;
         }
 
         public void Dispose() => Stop();

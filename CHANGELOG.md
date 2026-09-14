@@ -2,6 +2,13 @@
 
 All notable changes to ClarionLsp will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- `GetDiagnostics` / `GetDiagnosticsAsync` now wait for the server's `clarion/diagnosticsStatus` completion signal instead of a quiet period, when the connected server sends it (Clarion-Extension #460 / clarion-lsp #5 follow-up). The wait returns on `complete` for the version it synced, which is the server's own fact rather than a guess; `deferred` (the async validators have not run yet during solution load) keeps waiting instead of concluding "clean" early, and `superseded` (the document changed mid-analysis) is not mistaken for a result. A server that does not send the signal (an older build) keeps the previous behaviour: await the first publish, then treat the stream going quiet for `DiagnosticsSettleMs` as settled. No contract change; `DiagnosticsSettleMs` remains as the fallback quiet period.
+
+> Note: the completion signal requires a Clarion-Extension build that publishes `clarion/diagnosticsStatus`. Until such a server is in use this change is a no-op (the quiet-period fallback runs), so it is safe to ship before or after that server is released.
+
 ## [1.4.2] - 2026-09-08
 
 ### Fixed
